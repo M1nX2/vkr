@@ -22,7 +22,7 @@ services:
       retries: 5
       start_period: 30s
 
-  # Django приложение
+  # Django приложение (использует VPN для доступа к бэкенду)
   django-app:
     build:
       context: .
@@ -38,15 +38,18 @@ services:
       - DEBUG=True
       - ALLOWED_HOSTS=*
       - CSRF_TRUSTED_ORIGINS=http://localhost:3000,http://127.0.0.1:3000,http://89.110.122.115:3000
-      # DB_HOST: используйте IP gateway Docker сети (обычно 172.17.0.1)
-      # Или IP сервера в локальной сети
-      - DB_HOST=mysql
+      - DB_HOST=172.17.0.1
       - DB_PORT=3306
       - DB_DATABASE=laravel
       - DB_USERNAME=root
       - DB_PASSWORD=secret
+      # Backend через VPN
       - PYTHON_API_URL=http://10.0.70.2:8000
       - PYTHON_API_URL_FALLBACK=http://10.0.70.14:8000
+    depends_on:
+      mysql:
+        condition: service_healthy
+    # Только Django использует VPN для доступа к удаленному бэкенду
     network_mode: "container:openvpn"
     restart: unless-stopped
     command: sh -c "python manage.py migrate --noinput && python manage.py runserver 0.0.0.0:8000"
@@ -55,11 +58,16 @@ services:
   webserver:
     image: nginx:alpine
     container_name: django-nginx
+    ports:
+      - "3000:80"
     volumes:
       - .:/app
       - django-static:/app/staticfiles
       - ./docker/nginx:/etc/nginx/conf.d
-    network_mode: "container:openvpn"
+    depends_on:
+      - django-app
+    networks:
+      - app-network
     restart: unless-stopped
 
 volumes:
