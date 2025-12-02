@@ -38,7 +38,7 @@ services:
       - DEBUG=True
       - ALLOWED_HOSTS=*
       - CSRF_TRUSTED_ORIGINS=http://localhost:3000,http://127.0.0.1:3000,http://89.110.122.115:3000
-      - DB_HOST=172.17.0.1
+      - DB_HOST=mysql
       - DB_PORT=3306
       - DB_DATABASE=laravel
       - DB_USERNAME=root
@@ -49,8 +49,9 @@ services:
     depends_on:
       mysql:
         condition: service_healthy
-    # Только Django использует VPN для доступа к удаленному бэкенду
-    network_mode: "container:openvpn"
+    networks:
+      - app-network
+      - openvpn-net
     restart: unless-stopped
     command: sh -c "python manage.py migrate --noinput && python manage.py runserver 0.0.0.0:8000"
 
@@ -79,3 +80,6 @@ networks:
   app-network:
     name: app-network
     driver: bridge
+  openvpn-net:
+    name: openvpn-net
+    external: true  # Подключаемся к существующей сети openvpn
