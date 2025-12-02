@@ -52,10 +52,33 @@ def check_api_health():
 class MainView(View):
     """Главная страница"""
     def get(self, request):
+        import json
+        
         # Проверяем доступность бэкенда
         backend_available = check_api_health()
+        
+        # Получаем активные задачи из сессии
+        active_tasks = request.session.get('active_video_tasks', {})
+        
+        # Фильтруем завершенные задачи (старше 1 часа)
+        now = datetime.now()
+        filtered_tasks = {}
+        for video_id, task in active_tasks.items():
+            started_at = datetime.fromisoformat(task['started_at'])
+            # Оставляем задачи не старше 1 часа
+            if (now - started_at).total_seconds() < 3600:
+                filtered_tasks[video_id] = task
+        
+        if filtered_tasks != active_tasks:
+            request.session['active_video_tasks'] = filtered_tasks
+            request.session.modified = True
+        
+        # Сериализуем задачи для JavaScript
+        active_tasks_json = json.dumps(list(filtered_tasks.values()) if filtered_tasks else [])
+        
         return render(request, 'main.html', {
-            'backend_available': backend_available
+            'backend_available': backend_available,
+            'active_tasks_json': active_tasks_json
         })
 
 
@@ -129,6 +152,21 @@ class VideoUploadView(View):
             if response.status_code == 200:
                 data = response.json()
                 
+                # Сохраняем задачу в сессию для отслеживания прогресса
+                video_id = data.get('video_id')
+                if video_id:
+                    if 'active_video_tasks' not in request.session:
+                        request.session['active_video_tasks'] = {}
+                    
+                    request.session['active_video_tasks'][video_id] = {
+                        'video_id': video_id,
+                        'filename': file.name,
+                        'started_at': datetime.now().isoformat(),
+                        'status': 'processing',
+                        'api_url': api_url  # Сохраняем URL для дальнейших запросов
+                    }
+                    request.session.modified = True
+                
                 # Сохраняем нарушения в базу данных
                 if 'violations' in data and isinstance(data['violations'], list) and len(data['violations']) > 0:
                     try:
@@ -166,7 +204,7 @@ class VideoUploadView(View):
             logger.error(f'Ошибка подключения к Python API: {e}')
             return JsonResponse({
                 'success': False,
-                'message': f'Не удалось подключиться к Python API. Проверьте, что сервис запущен и доступен по адресу: {API_URL}'
+                'message': f'Не удалось подключиться к Python API. Проверьте, что сервис запущен и доступен по адресу: {api_url}'
             }, status=503)
         except Exception as e:
             logger.error(f'Ошибка обработки видео: {e}')
@@ -176,6 +214,45 @@ class VideoUploadView(View):
             }, status=500)
 
 
+class TaskStatusView(View):
+    """Получение статуса активных задач из сессии"""
+    
+    def get(self, request):
+        active_tasks = request.session.get('active_video_tasks', {})
+        return JsonResponse({
+            'success': True,
+            'tasks': list(active_tasks.values())
+        })
+
+
+class TaskCompleteView(View):
+    """Пометка задачи как завершенной"""
+    
+    @method_decorator(csrf_exempt)
+    def dispatch(self, *args, **kwargs):
+        return super().dispatch(*args, **kwargs)
+    
+    def post(self, request, video_id):
+        active_tasks = request.session.get('active_video_tasks', {})
+        
+        if video_id in active_tasks:
+            # Обновляем статус задачи
+            active_tasks[video_id]['status'] = 'completed'
+            active_tasks[video_id]['completed_at'] = datetime.now().isoformat()
+            request.session['active_video_tasks'] = active_tasks
+            request.session.modified = True
+            
+            return JsonResponse({
+                'success': True,
+                'message': 'Задача помечена как завершенная'
+            })
+        
+        return JsonResponse({
+            'success': False,
+            'message': 'Задача не найдена'
+        }, status=404)
+
+
 class ViolationsListView(View):
     """Получение списка нарушений"""
     
@@ -183,23 +260,27 @@ class ViolationsListView(View):
         start_date = request.GET.get('start_date')
         end_date = request.GET.get('end_date')
         
-        try:
-            # Пытаемся получить из Python API
-            params = {}
-            if start_date:
-                params['start_date'] = start_date
-            if end_date:
-                params['end_date'] = end_date
-            
-            response = requests.get(f'{API_URL}/api/v1/violations', params=params, timeout=10)
-            
-            if response.status_code == 200:
-                return JsonResponse({
-                    'success': True,
-                    'violations': response.json()
-                })
-        except Exception:
-            pass
+        # Получаем доступный URL
+        api_url = get_available_api_url()
+        
+        if api_url:
+            try:
+                # Пытаемся получить из Python API
+                params = {}
+                if start_date:
+                    params['start_date'] = start_date
+                if end_date:
+                    params['end_date'] = end_date
+                
+                response = requests.get(f'{api_url}/api/v1/violations', params=params, timeout=10)
+                
+                if response.status_code == 200:
+                    return JsonResponse({
+                        'success': True,
+                        'violations': response.json()
+                    })
+            except Exception:
+                pass
         
         # Fallback на базу данных
         query = Violation.objects.all()
@@ -232,16 +313,26 @@ class VideoViolationsView(View):
     """Получение нарушений для конкретного видео"""
     
     def get(self, request, video_id):
-        try:
-            response = requests.get(f'{API_URL}/api/v1/violations/{video_id}', timeout=10)
-            
-            if response.status_code == 200:
-                return JsonResponse({
-                    'success': True,
-                    'data': response.json()
-                })
-        except Exception:
-            pass
+        # Получаем доступный URL (предпочтительно тот, что использовался для загрузки)
+        active_tasks = request.session.get('active_video_tasks', {})
+        api_url = None
+        
+        if video_id in active_tasks and 'api_url' in active_tasks[video_id]:
+            api_url = active_tasks[video_id]['api_url']
+        else:
+            api_url = get_available_api_url()
+        
+        if api_url:
+            try:
+                response = requests.get(f'{api_url}/api/v1/violations/{video_id}', timeout=10)
+                
+                if response.status_code == 200:
+                    return JsonResponse({
+                        'success': True,
+                        'data': response.json()
+                    })
+            except Exception:
+                pass
         
         # Fallback на базу данных
         violations = Violation.objects.filter(video_id=video_id)
@@ -271,13 +362,37 @@ class VideoProgressView(View):
     """Получение прогресса обработки видео"""
     
     def get(self, request, video_id):
-        try:
-            response = requests.get(f'{API_URL}/api/v1/progress/{video_id}', timeout=10)
-            
-            if response.status_code == 200:
-                return JsonResponse(response.json())
-        except Exception:
-            pass
+        # Получаем URL из сессии или используем доступный
+        active_tasks = request.session.get('active_video_tasks', {})
+        api_url = None
+        
+        if video_id in active_tasks and 'api_url' in active_tasks[video_id]:
+            api_url = active_tasks[video_id]['api_url']
+        else:
+            api_url = get_available_api_url()
+        
+        if api_url:
+            try:
+                response = requests.get(f'{api_url}/api/v1/progress/{video_id}', timeout=10)
+                
+                if response.status_code == 200:
+                    progress_data = response.json()
+                    
+                    # Обновляем статус в сессии
+                    if video_id in active_tasks:
+                        if progress_data.get('completed') or progress_data.get('percent', 0) >= 100:
+                            active_tasks[video_id]['status'] = 'completed'
+                            active_tasks[video_id]['completed_at'] = datetime.now().isoformat()
+                        else:
+                            active_tasks[video_id]['status'] = 'processing'
+                            active_tasks[video_id]['percent'] = progress_data.get('percent', 0)
+                        
+                        request.session['active_video_tasks'] = active_tasks
+                        request.session.modified = True
+                    
+                    return JsonResponse(progress_data)
+            except Exception:
+                pass
         
         # Если прогресс не найден, возможно обработка завершена
         return JsonResponse({
@@ -291,14 +406,24 @@ class VideoView(View):
     """Получение обработанного видео"""
     
     def get(self, request, video_id):
-        try:
-            response = requests.get(f'{API_URL}/api/v1/video/{video_id}', timeout=30, stream=True)
-            
-            if response.status_code == 200:
-                http_response = HttpResponse(response.content, content_type='video/mp4')
-                return http_response
-        except Exception as e:
-            logger.error(f'Ошибка получения видео: {e}')
+        # Получаем URL из сессии
+        active_tasks = request.session.get('active_video_tasks', {})
+        api_url = None
+        
+        if video_id in active_tasks and 'api_url' in active_tasks[video_id]:
+            api_url = active_tasks[video_id]['api_url']
+        else:
+            api_url = get_available_api_url()
+        
+        if api_url:
+            try:
+                response = requests.get(f'{api_url}/api/v1/video/{video_id}', timeout=30, stream=True)
+                
+                if response.status_code == 200:
+                    http_response = HttpResponse(response.content, content_type='video/mp4')
+                    return http_response
+            except Exception as e:
+                logger.error(f'Ошибка получения видео: {e}')
         
         return JsonResponse({
             'success': False,
@@ -426,4 +551,3 @@ class ExportExcelView(View):
         
         wb.save(response)
         return response
-

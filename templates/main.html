@@ -7,7 +7,6 @@
     <meta http-equiv="Pragma" content="no-cache">
     <meta http-equiv="Expires" content="0">
     <title>Система контроля содержания собак</title>
-    {% csrf_token %}
     <!-- Bootstrap CSS -->
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
@@ -116,7 +115,7 @@
                     {% if not backend_available %}
                     <div class="alert alert-danger" role="alert">
                         <h4 class="alert-heading">⚠️ Сервис обработки видео сейчас недоступен</h4>
-                        <p class="mb-0">Бэкенд для обработки видео не отвечает. Пожалуйста, проверьте, что сервис <strong>neurodog-backend</strong> запущен.</p>
+                        <p class="mb-0">Сервис для обработки видео не отвечает.</p>
                     </div>
                     {% endif %}
                     <form id="videoUploadForm" {% if not backend_available %}style="display: none;"{% endif %}>
@@ -181,8 +180,8 @@
                     <!-- Блок формирования отчета -->
                     <div class="report-period mt-5">
                         <h4 class="mb-3">Формирование отчета за период</h4>
-                        <form id="reportForm" action="{% url 'report' %}" method="POST">
-                            {% csrf_token %}
+                        <form id="reportForm" method="POST" action="{% url 'report' %}">
+                            <input type="hidden" name="csrfmiddlewaretoken" value="{{ csrf_token }}">
                             <div class="row">
                                 <div class="col-md-6 mb-3">
                                     <label for="startDate" class="form-label">Дата начала</label>
@@ -235,6 +234,54 @@
             const downloadVideoBtn = document.getElementById('downloadVideoBtn');
             
             let filesToUpload = [];
+            
+            // Восстанавливаем активные задачи из сессии
+            const activeTasks = {{ active_tasks_json|safe }};
+            if (activeTasks && activeTasks.length > 0) {
+                console.log('Найдены активные задачи:', activeTasks);
+                // Восстанавливаем последнюю задачу
+                const lastTask = activeTasks[activeTasks.length - 1];
+                if (lastTask.status === 'processing') {
+                    console.log('Восстанавливаем обработку видео:', lastTask.video_id);
+                    restoreProcessing(lastTask.video_id);
+                }
+            }
+            
+            // Функция восстановления обработки
+            async function restoreProcessing(videoId) {
+                progressContainer.style.display = 'block';
+                submitBtn.disabled = true;
+                updateProgress(0, 'Восстановление обработки...');
+                
+                try {
+                    // Отслеживаем прогресс
+                    await trackProgress(videoId);
+                    
+                    // Получаем финальные результаты
+                    const finalResponse = await fetch(`/api/violations/${encodeURIComponent(videoId)}/`);
+                    if (finalResponse.ok) {
+                        const responseData = await finalResponse.json();
+                        if (responseData.success && responseData.data) {
+                            displayResults({
+                                success: true,
+                                violations: responseData.data.violations || [],
+                                processingTime: responseData.data.processing_time || 'N/A',
+                                videoId: videoId
+                            });
+                            
+                            // Помечаем задачу как завершенную
+                            fetch(`/api/tasks/${encodeURIComponent(videoId)}/complete/`, {
+                                method: 'POST'
+                            });
+                        }
+                    }
+                } catch (error) {
+                    console.error('Ошибка восстановления:', error);
+                } finally {
+                    progressContainer.style.display = 'none';
+                    submitBtn.disabled = false;
+                }
+            }
 
             // Обработка выбора файлов
             fileInput.addEventListener('change', function() {
@@ -365,7 +412,7 @@
                 
                 try {
                     // Отправляем первый файл (можно расширить для множественной загрузки)
-                    const csrfToken = document.querySelector('[name=csrfmiddlewaretoken]').value;
+                    const csrfToken = getCookie('csrftoken') || document.querySelector('[name=csrfmiddlewaretoken]')?.value;
                     const response = await fetch('/api/video/upload/', {
                         method: 'POST',
                         body: formData,
@@ -555,12 +602,37 @@
                 }
             }
             
+            // Функция получения CSRF токена из cookie
+            function getCookie(name) {
+                let cookieValue = null;
+                if (document.cookie && document.cookie !== '') {
+                    const cookies = document.cookie.split(';');
+                    for (let i = 0; i < cookies.length; i++) {
+                        const cookie = cookies[i].trim();
+                        if (cookie.substring(0, name.length + 1) === (name + '=')) {
+                            cookieValue = decodeURIComponent(cookie.substring(name.length + 1));
+                            break;
+                        }
+                    }
+                }
+                return cookieValue;
+            }
+            
+            // Устанавливаем CSRF токен для AJAX запросов
+            const csrftoken = getCookie('csrftoken');
+            if (csrftoken) {
+                window.csrfToken = csrftoken;
+            }
+            
             // Устанавливаем даты по умолчанию для отчета
             const today = new Date();
             const firstDay = new Date(today.getFullYear(), today.getMonth(), 1);
             
-            document.getElementById('startDate').valueAsDate = firstDay;
-            document.getElementById('endDate').valueAsDate = today;
+            const startDateInput = document.getElementById('startDate');
+            const endDateInput = document.getElementById('endDate');
+            
+            if (startDateInput) startDateInput.valueAsDate = firstDay;
+            if (endDateInput) endDateInput.valueAsDate = today;
         });
     </script>
 </body>
