@@ -46,8 +46,6 @@ services:
       - PYTHON_API_URL=http://10.0.70.2:8000
       - PYTHON_API_URL_FALLBACK=http://10.0.70.14:8000
     network_mode: "container:openvpn"
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     restart: unless-stopped
     command: sh -c "python manage.py migrate --noinput && python manage.py runserver 0.0.0.0:8000"
 
