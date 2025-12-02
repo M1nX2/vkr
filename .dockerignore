@@ -1,0 +1,62 @@
+# Node modules (будут установлены в контейнере)
+node_modules
+npm-debug.log
+yarn-error.log
+
+# Vendor (будет установлен через composer install)
+vendor
+
+# Git
+.git
+.gitignore
+.gitattributes
+
+# IDE
+.idea
+.vscode
+*.swp
+*.swo
+*~
+
+# Laravel
+.env
+.env.backup
+.env.production
+.phpunit.result.cache
+Homestead.json
+Homestead.yaml
+auth.json
+
+# Storage и кэш (будут созданы в контейнере)
+storage/logs/*
+storage/framework/cache/*
+storage/framework/sessions/*
+storage/framework/views/*
+!storage/logs/.gitignore
+!storage/framework/cache/.gitignore
+!storage/framework/sessions/.gitignore
+!storage/framework/views/.gitignore
+
+# Bootstrap cache
+bootstrap/cache/*
+!bootstrap/cache/.gitignore
+
+# Docker
+docker-compose.yml
+Dockerfile
+.dockerignore
+
+# Документация
+README.md
+*.md
+
+# Тесты
+tests
+phpunit.xml
+
+# Временные файлы
+*.log
+*.tmp
+.DS_Store
+Thumbs.db
+
