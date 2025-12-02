@@ -1,28 +1,7 @@
 version: '3.8'
 
 services:
-  # MySQL
-  mysql:
-    image: mysql:8.0
-    container_name: django-mysql
-    environment:
-      - MYSQL_DATABASE=laravel
-      - MYSQL_ROOT_PASSWORD=secret
-    volumes:
-      - mysql_data:/var/lib/mysql
-    networks:
-      - app-network
-    restart: unless-stopped
-    ports:
-      - "3306:3306"
-    healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-psecret"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 30s
-
-  # Django приложение через существующий OpenVPN контейнер
+  # Django фронтенд через существующий OpenVPN контейнер
   django-app:
     build:
       context: .
@@ -38,42 +17,19 @@ services:
       - DEBUG=True
       - ALLOWED_HOSTS=*
       - CSRF_TRUSTED_ORIGINS=http://localhost:3000,http://127.0.0.1:3000,http://89.110.122.115:3000
-      # MySQL через IP Docker-хоста
-      - DB_HOST=172.18.0.1
+      # MySQL на бэкенде через VPN
+      - DB_HOST=10.0.70.2
       - DB_PORT=3306
       - DB_DATABASE=laravel
       - DB_USERNAME=root
       - DB_PASSWORD=secret
-      # Backend через VPN
+      # Backend API через VPN
       - PYTHON_API_URL=http://10.0.70.2:8000
       - PYTHON_API_URL_FALLBACK=http://10.0.70.14:8000
     restart: unless-stopped
-    command: sh -c "python manage.py migrate --noinput && python manage.py runserver 0.0.0.0:8000"
+    command: sh -c "python manage.py migrate --noinput && python manage.py runserver 0.0.0.0:3000"
     network_mode: "container:openvpn"
 
-  # Nginx
-  webserver:
-    image: nginx:alpine
-    container_name: django-nginx
-    ports:
-      - "3000:80"
-    volumes:
-      - .:/app
-      - django-static:/app/staticfiles
-      - ./docker/nginx:/etc/nginx/conf.d
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    depends_on:
-      - django-app
-    restart: unless-stopped
-    networks:
-      - app-network
-
 volumes:
-  mysql_data:
   django-static:
   django-media:
-
-networks:
-  app-network:
-    driver: bridge

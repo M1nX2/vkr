@@ -66,9 +66,9 @@ Nginx автоматически проксирует запросы к бэке
 ```bash
 docker-compose down
 ```
-
 ## Volumes
 
 - `mysql_data` - Данные MySQL
 - `django-static` - Статические файлы Django
 - `django-media` - Медиа файлы
+
