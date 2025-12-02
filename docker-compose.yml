@@ -29,6 +29,8 @@ services:
     restart: unless-stopped
     command: sh -c "python manage.py migrate --noinput && python manage.py runserver 0.0.0.0:3000"
     network_mode: "container:openvpn"
+    ports:
+      - "3000:3000"
 
 volumes:
   django-static:
