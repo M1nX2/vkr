@@ -16,7 +16,7 @@ services:
       - SECRET_KEY=django-insecure-change-this-in-production
       - DEBUG=True
       - ALLOWED_HOSTS=*
-      - CSRF_TRUSTED_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
+      - CSRF_TRUSTED_ORIGINS=http://localhost:3000,http://127.0.0.1:3000,89.110.122.115:3000
       # Database
       - DB_HOST=mysql
       - DB_PORT=3306
@@ -32,6 +32,7 @@ services:
     depends_on:
       mysql:
         condition: service_healthy
+    network_mode: "container:openvpn"
     networks:
       - app-network
     restart: unless-stopped

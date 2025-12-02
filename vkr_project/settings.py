@@ -43,9 +43,13 @@ CSRF_USE_SESSIONS = False
 CSRF_COOKIE_SAMESITE = 'Lax'
 SESSION_COOKIE_SAMESITE = 'Lax'
 
-# Получаем CSRF_TRUSTED_ORIGINS из переменной окружения или используем значения по умолчанию
-csrf_origins_env = os.environ.get('CSRF_TRUSTED_ORIGINS', 'http://localhost:3000,http://127.0.0.1:3000')
-CSRF_TRUSTED_ORIGINS = [origin.strip() for origin in csrf_origins_env.split(',') if origin.strip()]
+# Получаем CSRF_TRUSTED_ORIGINS из переменной окружения
+# Если не указано, используем пустой список (разрешаем все при DEBUG=True)
+csrf_origins_env = os.environ.get('CSRF_TRUSTED_ORIGINS', '')
+if csrf_origins_env:
+    CSRF_TRUSTED_ORIGINS = [origin.strip() for origin in csrf_origins_env.split(',') if origin.strip()]
+else:
+    CSRF_TRUSTED_ORIGINS = []
 
 ROOT_URLCONF = 'vkr_project.urls'
 
