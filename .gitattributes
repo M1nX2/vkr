@@ -1,11 +1,10 @@
 * text=auto eol=lf
 
-*.blade.php diff=html
-*.css diff=css
+*.py diff=python
 *.html diff=html
+*.css diff=css
 *.md diff=markdown
-*.php diff=php
+*.js diff=javascript
+*.json diff=json
 
 /.github export-ignore
-CHANGELOG.md export-ignore
-.styleci.yml export-ignore

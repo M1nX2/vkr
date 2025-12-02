@@ -1,62 +1,85 @@
 version: '3.8'
 
 services:
-  # PHP-FPM сервис
-  app:
+  # Django приложение
+  django-app:
     build:
       context: .
       dockerfile: Dockerfile
+    container_name: django
     volumes:
-      - .:/var/www
+      - .:/app
+      - django-static:/app/staticfiles
+      - django-media:/app/media
     environment:
+      # Django Settings
+      - SECRET_KEY=django-insecure-change-this-in-production
+      - DEBUG=True
+      - ALLOWED_HOSTS=*
+      # Database
       - DB_HOST=mysql
+      - DB_PORT=3306
       - DB_DATABASE=laravel
       - DB_USERNAME=root
       - DB_PASSWORD=secret
+      # Backend API (используйте IP через VPN)
+      # Для локального запуска: http://neurodog-backend:8000
+      # Для VPN: http://10.0.70.2:8000 или http://10.0.70.14:8000
+      - PYTHON_API_URL=http://neurodog-backend:8000
+      # Резервный Backend API (если основной недоступен)
+      - PYTHON_API_URL_FALLBACK=http://10.0.70.2:8000
     depends_on:
-      - mysql
+      mysql:
+        condition: service_healthy
     networks:
-      - laravel-network
+      - app-network
+    restart: unless-stopped
+    command: sh -c "python manage.py migrate --noinput && python manage.py runserver 0.0.0.0:8000"
 
   # Nginx
   webserver:
     image: nginx:alpine
+    container_name: django-nginx
     ports:
-      - "8000:80"
+      - "3000:80"
     volumes:
-      - .:/var/www
+      - .:/app
+      - django-static:/app/staticfiles
       - ./docker/nginx:/etc/nginx/conf.d
     depends_on:
-      - app
+      django-app:
+        condition: service_started
     networks:
-      - laravel-network
+      - app-network
+    restart: unless-stopped
 
   # MySQL
   mysql:
     image: mysql:8.0
+    container_name: django-mysql
     environment:
       - MYSQL_DATABASE=laravel
       - MYSQL_ROOT_PASSWORD=secret
     volumes:
       - mysql_data:/var/lib/mysql
     networks:
-      - laravel-network
-
-  # Node.js (для фронтенда)
-  node:
-    image: node:18
-    working_dir: /var/www
-    volumes:
-      - .:/var/www
-    command: sh -c "npm install && npm run dev"
-    depends_on:
-      - app
-    networks:
-      - laravel-network
+      - app-network
+    restart: unless-stopped
+    ports:
+      - "3306:3306"
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-psecret"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
 
 volumes:
   mysql_data:
+  django-static:
+  django-media:
 
 networks:
-  laravel-network:
+  app-network:
+    name: app-network
     driver: bridge
