@@ -1,3 +1,5 @@
+version: '3.8'
+
 services:
   # MySQL
   mysql:
@@ -8,9 +10,11 @@ services:
       - MYSQL_ROOT_PASSWORD=secret
     volumes:
       - mysql_data:/var/lib/mysql
+    networks:
+      - app-network
     restart: unless-stopped
     ports:
-      - "3306:3306"   # проброс порта для доступа из Django через VPN
+      - "3306:3306"
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-psecret"]
       interval: 10s
@@ -45,7 +49,7 @@ services:
       - PYTHON_API_URL_FALLBACK=http://10.0.70.14:8000
     restart: unless-stopped
     command: sh -c "python manage.py migrate --noinput && python manage.py runserver 0.0.0.0:8000"
-    network_mode: "container:openvpn"  # Использует существующий контейнер OpenVPN
+    network_mode: "container:openvpn"
 
   # Nginx
   webserver:
@@ -57,11 +61,19 @@ services:
       - .:/app
       - django-static:/app/staticfiles
       - ./docker/nginx:/etc/nginx/conf.d
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       - django-app
     restart: unless-stopped
+    networks:
+      - app-network
 
 volumes:
   mysql_data:
   django-static:
   django-media:
+
+networks:
+  app-network:
+    driver: bridge
