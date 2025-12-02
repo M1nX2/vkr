@@ -43,12 +43,9 @@ services:
       # Backend через VPN
       - PYTHON_API_URL=http://10.0.70.2:8000
       - PYTHON_API_URL_FALLBACK=http://10.0.70.14:8000
-    depends_on:
-      mysql:
-        condition: service_healthy
     restart: unless-stopped
     command: sh -c "python manage.py migrate --noinput && python manage.py runserver 0.0.0.0:8000"
-    network_mode: "service:openvpn"  # Использует существующий контейнер OpenVPN
+    network_mode: "container:openvpn"  # Использует существующий контейнер OpenVPN
 
   # Nginx
   webserver:
