@@ -10,11 +10,9 @@ services:
       - MYSQL_ROOT_PASSWORD=secret
     volumes:
       - mysql_data:/var/lib/mysql
-    networks:
-      - app-network
     restart: unless-stopped
     ports:
-      - "3306:3306"
+      - "3306:3306"   # проброс порта для доступа из контейнера Django через VPN
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-psecret"]
       interval: 10s
@@ -22,7 +20,7 @@ services:
       retries: 5
       start_period: 30s
 
-  # Django приложение (использует VPN для доступа к бэкенду)
+  # Django приложение (через существующий OpenVPN контейнер)
   django-app:
     build:
       context: .
@@ -33,12 +31,13 @@ services:
       - django-static:/app/staticfiles
       - django-media:/app/media
     environment:
-      # Django Settings
+      # Django settings
       - SECRET_KEY=django-insecure-change-this-in-production
       - DEBUG=True
       - ALLOWED_HOSTS=*
       - CSRF_TRUSTED_ORIGINS=http://localhost:3000,http://127.0.0.1:3000,http://89.110.122.115:3000
-      - DB_HOST=mysql
+      # MySQL через IP хоста Docker
+      - DB_HOST=172.18.0.1
       - DB_PORT=3306
       - DB_DATABASE=laravel
       - DB_USERNAME=root
@@ -47,12 +46,10 @@ services:
       - PYTHON_API_URL=http://10.0.70.2:8000
       - PYTHON_API_URL_FALLBACK=http://10.0.70.14:8000
     depends_on:
-      mysql:
-        condition: service_healthy
-    networks:
-      - app-network
+      - mysql
     restart: unless-stopped
     command: sh -c "python manage.py migrate --noinput && python manage.py runserver 0.0.0.0:8000"
+    network_mode: "service:openvpn"  # Использует существующий контейнер OpenVPN
 
   # Nginx
   webserver:
@@ -66,16 +63,9 @@ services:
       - ./docker/nginx:/etc/nginx/conf.d
     depends_on:
       - django-app
-    networks:
-      - app-network
     restart: unless-stopped
 
 volumes:
   mysql_data:
   django-static:
   django-media:
-
-networks:
-  app-network:
-    name: app-network
-    driver: bridge
