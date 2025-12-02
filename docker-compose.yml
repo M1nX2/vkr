@@ -1,60 +1,6 @@
 version: '3.8'
 
 services:
-  # Django приложение
-  django-app:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: django
-    volumes:
-      - .:/app
-      - django-static:/app/staticfiles
-      - django-media:/app/media
-    environment:
-      # Django Settings
-      - SECRET_KEY=django-insecure-change-this-in-production
-      - DEBUG=True
-      - ALLOWED_HOSTS=*
-      - CSRF_TRUSTED_ORIGINS=http://localhost:3000,http://127.0.0.1:3000,89.110.122.115:3000
-      # Database
-      - DB_HOST=mysql
-      - DB_PORT=3306
-      - DB_DATABASE=laravel
-      - DB_USERNAME=root
-      - DB_PASSWORD=secret
-      # Backend API (используйте IP через VPN)
-      # Для локального запуска: http://neurodog-backend:8000
-      # Для VPN: http://10.0.70.2:8000 или http://10.0.70.14:8000
-      - PYTHON_API_URL=http://neurodog-backend:8000
-      # Резервный Backend API (если основной недоступен)
-      - PYTHON_API_URL_FALLBACK=http://10.0.70.2:8000
-    depends_on:
-      mysql:
-        condition: service_healthy
-    network_mode: "container:openvpn"
-    networks:
-      - app-network
-    restart: unless-stopped
-    command: sh -c "python manage.py migrate --noinput && python manage.py runserver 0.0.0.0:8000"
-
-  # Nginx
-  webserver:
-    image: nginx:alpine
-    container_name: django-nginx
-    ports:
-      - "3000:80"
-    volumes:
-      - .:/app
-      - django-static:/app/staticfiles
-      - ./docker/nginx:/etc/nginx/conf.d
-    depends_on:
-      django-app:
-        condition: service_started
-    networks:
-      - app-network
-    restart: unless-stopped
-
   # MySQL
   mysql:
     image: mysql:8.0
@@ -75,6 +21,46 @@ services:
       timeout: 5s
       retries: 5
       start_period: 30s
+
+  # Django приложение
+  django-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: django
+    volumes:
+      - .:/app
+      - django-static:/app/staticfiles
+      - django-media:/app/media
+    environment:
+      # Django Settings
+      - SECRET_KEY=django-insecure-change-this-in-production
+      - DEBUG=True
+      - ALLOWED_HOSTS=*
+      - CSRF_TRUSTED_ORIGINS=http://localhost:3000,http://127.0.0.1:3000,http://89.110.122.115:3000
+      - DB_HOST=host.docker.internal
+      - DB_PORT=3306
+      - DB_DATABASE=laravel
+      - DB_USERNAME=root
+      - DB_PASSWORD=secret
+      - PYTHON_API_URL=http://10.0.70.2:8000
+      - PYTHON_API_URL_FALLBACK=http://10.0.70.14:8000
+    network_mode: "container:openvpn"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+    command: sh -c "python manage.py migrate --noinput && python manage.py runserver 0.0.0.0:8000"
+
+  # Nginx
+  webserver:
+    image: nginx:alpine
+    container_name: django-nginx
+    volumes:
+      - .:/app
+      - django-static:/app/staticfiles
+      - ./docker/nginx:/etc/nginx/conf.d
+    network_mode: "container:openvpn"
+    restart: unless-stopped
 
 volumes:
   mysql_data:
