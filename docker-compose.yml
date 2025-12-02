@@ -51,7 +51,6 @@ services:
         condition: service_healthy
     networks:
       - app-network
-      - openvpn-net
     restart: unless-stopped
     command: sh -c "python manage.py migrate --noinput && python manage.py runserver 0.0.0.0:8000"
 
@@ -80,6 +79,3 @@ networks:
   app-network:
     name: app-network
     driver: bridge
-  openvpn-net:
-    name: openvpn-net
-    external: true  # Подключаемся к существующей сети openvpn
