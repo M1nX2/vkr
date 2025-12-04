@@ -48,6 +48,7 @@ env/
 .DS_Store
 .fleet/
 
-# Docker
+# Docker / VPN secrets
 .dockerignore
-config/client.ovpn
+config/*
+!config/.gitkeep

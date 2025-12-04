@@ -1,18 +1,35 @@
 version: '3.8'
 
 services:
+  openvpn-client:
+    build:
+      context: ./openvpn-client
+      dockerfile: Dockerfile
+    container_name: openvpn-client
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    volumes:
+      - ./config:/vpn:ro
+    environment:
+      - OPENVPN_CONFIG=/vpn/client.ovpn
+      - OPENVPN_ARGS=
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    networks:
+      - app-network
+
   django-app:
     build:
       context: .
       dockerfile: Dockerfile
     container_name: django
-    ports:
-      - "3000:3000"
     volumes:
       - .:/app
       - django-static:/app/staticfiles
       - django-media:/app/media
-      - ./config:/app/config:ro
     environment:
       # Django settings
       - SECRET_KEY=django-insecure-change-this-in-production
@@ -20,7 +37,6 @@ services:
       - ALLOWED_HOSTS=*
       - CSRF_TRUSTED_ORIGINS=http://localhost:3000,http://127.0.0.1:3000,http://89.110.122.115:3000
       - DJANGO_PORT=3000
-      - OPENVPN_CONFIG=/app/config/client.ovpn
       # MySQL на бэкенде через VPN
       - DB_HOST=10.0.70.2
       - DB_PORT=3306
@@ -31,12 +47,9 @@ services:
       - PYTHON_API_URL=http://10.0.70.2:8000
       - PYTHON_API_URL_FALLBACK=http://10.0.70.14:8000
     restart: unless-stopped
-    cap_add:
-      - NET_ADMIN
-    devices:
-      - /dev/net/tun:/dev/net/tun
-    networks:
-      - app-network
+    depends_on:
+      - openvpn-client
+    network_mode: "service:openvpn-client"
 
 networks:
   app-network:

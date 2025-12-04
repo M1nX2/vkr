@@ -6,8 +6,6 @@ RUN apt-get update && apt-get install -y \
     gcc \
     default-libmysqlclient-dev \
     pkg-config \
-    openvpn \
-    iproute2 \
     && rm -rf /var/lib/apt/lists/*
 
 # Рабочая директория
