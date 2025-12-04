@@ -16,16 +16,18 @@ services:
       - OPENVPN_CONFIG=/vpn/client.ovpn
       - OPENVPN_ARGS=
     restart: unless-stopped
-    ports:
-      - "8081:3000"
     networks:
       - app-network
+    sysctls:
+      - net.ipv4.ip_forward=1
 
   django-app:
     build:
       context: .
       dockerfile: Dockerfile
     container_name: django
+    ports:
+      - "8081:3000"
     volumes:
       - .:/app
       - django-static:/app/staticfiles
@@ -46,10 +48,15 @@ services:
       # Backend API через VPN
       - PYTHON_API_URL=http://10.0.70.2:8000
       - PYTHON_API_URL_FALLBACK=http://10.0.70.14:8000
+      # VPN Gateway (используем DNS-имя контейнера)
+      - VPN_GATEWAY=openvpn-client
+    cap_add:
+      - NET_ADMIN
     restart: unless-stopped
     depends_on:
       - openvpn-client
-    network_mode: "service:openvpn-client"
+    networks:
+      - app-network
 
 networks:
   app-network:
