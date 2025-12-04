@@ -19,6 +19,9 @@ COPY requirements.txt .
 # Установка Python зависимостей
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Копируем вспомогательные скрипты отдельно, чтобы сохранить права
+COPY entrypoint.sh /usr/local/bin/vkr-entrypoint.sh
+
 # Копируем весь проект
 COPY . .
 
@@ -26,11 +29,11 @@ COPY . .
 RUN mkdir -p /app/staticfiles /app/media
 
 # Настройка прав
-RUN chmod +x /app/manage.py /app/entrypoint.sh
+RUN chmod +x /app/manage.py /usr/local/bin/vkr-entrypoint.sh
 
 # Порт для Django
 EXPOSE 3000
 
 ENV DJANGO_PORT=3000
 
-ENTRYPOINT ["/app/entrypoint.sh"]
+ENTRYPOINT ["/usr/local/bin/vkr-entrypoint.sh"]

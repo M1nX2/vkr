@@ -50,3 +50,4 @@ env/
 
 # Docker
 .dockerignore
+config/client.ovpn
