@@ -17,7 +17,7 @@ services:
       - OPENVPN_ARGS=
     restart: unless-stopped
     ports:
-      - "3000:3000"
+      - "8081:3000"
     networks:
       - app-network
 
@@ -35,7 +35,7 @@ services:
       - SECRET_KEY=django-insecure-change-this-in-production
       - DEBUG=True
       - ALLOWED_HOSTS=*
-      - CSRF_TRUSTED_ORIGINS=http://localhost:3000,http://127.0.0.1:3000,http://89.110.122.115:3000
+      - CSRF_TRUSTED_ORIGINS=http://localhost:3000,http://127.0.0.1:3000,http://89.110.122.115:8081
       - DJANGO_PORT=3000
       # MySQL на бэкенде через VPN
       - DB_HOST=10.0.70.2
