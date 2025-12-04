@@ -6,6 +6,8 @@ RUN apt-get update && apt-get install -y \
     gcc \
     default-libmysqlclient-dev \
     pkg-config \
+    openvpn \
+    iproute2 \
     && rm -rf /var/lib/apt/lists/*
 
 # Рабочая директория
@@ -20,17 +22,15 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Копируем весь проект
 COPY . .
 
-# Собираем статические файлы
-RUN python manage.py collectstatic --noinput || true
-
 # Создаем директории для статики и медиа
 RUN mkdir -p /app/staticfiles /app/media
 
 # Настройка прав
-RUN chmod +x /app/manage.py
+RUN chmod +x /app/manage.py /app/entrypoint.sh
 
 # Порт для Django
-EXPOSE 8000
+EXPOSE 3000
 
-# Команда запуска
-CMD ["python", "manage.py", "runserver", "0.0.0.0:8000"]
+ENV DJANGO_PORT=3000
+
+ENTRYPOINT ["/app/entrypoint.sh"]

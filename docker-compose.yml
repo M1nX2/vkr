@@ -1,22 +1,26 @@
 version: '3.8'
 
 services:
-  # Django фронтенд через существующий OpenVPN контейнер
   django-app:
     build:
       context: .
       dockerfile: Dockerfile
     container_name: django
+    ports:
+      - "3000:3000"
     volumes:
       - .:/app
       - django-static:/app/staticfiles
       - django-media:/app/media
+      - ./config:/app/config:ro
     environment:
       # Django settings
       - SECRET_KEY=django-insecure-change-this-in-production
       - DEBUG=True
       - ALLOWED_HOSTS=*
       - CSRF_TRUSTED_ORIGINS=http://localhost:3000,http://127.0.0.1:3000,http://89.110.122.115:3000
+      - DJANGO_PORT=3000
+      - OPENVPN_CONFIG=/app/config/client.ovpn
       # MySQL на бэкенде через VPN
       - DB_HOST=10.0.70.2
       - DB_PORT=3306
@@ -27,10 +31,16 @@ services:
       - PYTHON_API_URL=http://10.0.70.2:8000
       - PYTHON_API_URL_FALLBACK=http://10.0.70.14:8000
     restart: unless-stopped
-    command: sh -c "python manage.py migrate --noinput && python manage.py runserver 0.0.0.0:3000"
-    network_mode: "container:openvpn"
-    ports:
-      - "3000:3000"
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    networks:
+      - app-network
+
+networks:
+  app-network:
+    driver: bridge
 
 volumes:
   django-static:
