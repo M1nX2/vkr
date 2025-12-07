@@ -39,15 +39,19 @@ services:
       - ALLOWED_HOSTS=*
       - CSRF_TRUSTED_ORIGINS=http://localhost:3000,http://127.0.0.1:3000,http://89.110.122.115:8081
       - DJANGO_PORT=3000
-      # MySQL на бэкенде через VPN
-      - DB_HOST=10.0.70.2
-      - DB_PORT=3306
-      - DB_DATABASE=laravel
-      - DB_USERNAME=root
-      - DB_PASSWORD=secret
-      # Backend API через VPN
-      - PYTHON_API_URL=http://10.0.70.2:8000
-      - PYTHON_API_URL_FALLBACK=http://10.0.70.14:8000
+      # MySQL на бэкенде (локально или через VPN)
+      # Для локального: DB_HOST=host.docker.internal или 172.17.0.1
+      # Для удалённого через VPN: DB_HOST=10.0.70.2
+      - DB_HOST=${DB_HOST:-10.0.70.2}
+      - DB_PORT=${DB_PORT:-3306}
+      - DB_DATABASE=${DB_DATABASE:-laravel}
+      - DB_USERNAME=${DB_USERNAME:-root}
+      - DB_PASSWORD=${DB_PASSWORD:-secret}
+      # Backend API (локально или через VPN)
+      # Для локального: PYTHON_API_URL=http://host.docker.internal:8000
+      # Для удалённого через VPN: PYTHON_API_URL=http://10.0.70.2:8000
+      - PYTHON_API_URL=${PYTHON_API_URL:-http://10.0.70.2:8000}
+      - PYTHON_API_URL_FALLBACK=${PYTHON_API_URL_FALLBACK:-http://10.0.70.14:8000}
       # VPN Gateway (используем DNS-имя контейнера)
       - VPN_GATEWAY=openvpn-client
     cap_add:

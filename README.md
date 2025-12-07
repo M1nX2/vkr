@@ -38,13 +38,67 @@ docker compose exec django-app python manage.py createsuperuser
 
 ## Переменные окружения
 
+### Локальное окружение (по умолчанию)
+
+Для работы с локальным бэкендом на том же хосте используйте:
+
+```bash
+export DB_HOST=host.docker.internal
+export DB_PORT=3306
+export PYTHON_API_URL=http://host.docker.internal:8000
+docker compose up -d --build
+```
+
+Или создайте файл `.env` в корне проекта:
+
+```bash
+DB_HOST=host.docker.internal
+DB_PORT=3306
+DB_DATABASE=laravel
+DB_USERNAME=root
+DB_PASSWORD=secret
+PYTHON_API_URL=http://host.docker.internal:8000
+PYTHON_API_URL_FALLBACK=http://10.0.70.14:8000
+```
+
+### Удалённое окружение через VPN
+
+Для работы с удалённым бэкендом через VPN:
+
+```bash
+export DB_HOST=10.0.70.2
+export DB_PORT=3306
+export PYTHON_API_URL=http://10.0.70.2:8000
+export PYTHON_API_URL_FALLBACK=http://10.0.70.14:8000
+docker compose up -d --build
+```
+
+Или в файле `.env`:
+
+```bash
+DB_HOST=10.0.70.2
+DB_PORT=3306
+DB_DATABASE=laravel
+DB_USERNAME=root
+DB_PASSWORD=secret
+PYTHON_API_URL=http://10.0.70.2:8000
+PYTHON_API_URL_FALLBACK=http://10.0.70.14:8000
+```
+
+### Все переменные окружения
+
 - `SECRET_KEY` – секретный ключ Django (по умолчанию: `django-insecure-change-this-in-production`)
 - `DEBUG` – режим отладки (`True` по умолчанию)
 - `ALLOWED_HOSTS` – список хостов, которым разрешён доступ
 - `CSRF_TRUSTED_ORIGINS` – доверенные источники для CSRF
-- `DJANGO_PORT` – порт внутри контейнера (по умолчанию `3000`, пробрасывается через OpenVPN-сервис)
-- `DB_HOST`, `DB_PORT`, `DB_DATABASE`, `DB_USERNAME`, `DB_PASSWORD` – параметры MySQL (адрес должен быть доступен через VPN)
-- `PYTHON_API_URL`, `PYTHON_API_URL_FALLBACK` – адреса FastAPI-бэкенда за VPN
+- `DJANGO_PORT` – порт внутри контейнера (по умолчанию `3000`)
+- `DB_HOST` – адрес MySQL (по умолчанию `host.docker.internal` для локального окружения)
+- `DB_PORT` – порт MySQL (по умолчанию `3306`)
+- `DB_DATABASE` – имя базы данных (по умолчанию `laravel`)
+- `DB_USERNAME` – пользователь MySQL (по умолчанию `root`)
+- `DB_PASSWORD` – пароль MySQL (по умолчанию `secret`)
+- `PYTHON_API_URL` – основной адрес FastAPI-бэкенда (по умолчанию `http://host.docker.internal:8000`)
+- `PYTHON_API_URL_FALLBACK` – резервный адрес FastAPI-бэкенда (по умолчанию `http://10.0.70.14:8000`)
 
 Переменные OpenVPN:
 
@@ -55,9 +109,10 @@ docker compose exec django-app python manage.py createsuperuser
 
 ## Сеть
 
-- Контейнер `openvpn-client` подключается к удалённому VPN и публикует порт `3000` на хост.
-- Контейнер `django-app` использует сетевой namespace OpenVPN-клиента (`network_mode: "service:openvpn-client"`), поэтому весь исходящий трафик к бэкенду/БД идёт через VPN, а входящие запросы приходят через проброшенный порт.
-- Docker создаёт сеть `app-network`, но порт наружу пробрасывается самим OpenVPN-клиентом.
+- Контейнер `openvpn-client` подключается к удалённому VPN и настраивает маршрутизацию для VPN-сетей.
+- Контейнер `django-app` находится в сети `app-network` и имеет прямой доступ на порт `8081:3000`.
+- При использовании VPN-адресов (10.0.70.x или 10.0.60.x) Django автоматически настраивает маршруты через `openvpn-client` для доступа к удалённым сервисам.
+- При использовании локальных адресов (`host.docker.internal`) VPN-маршруты не настраиваются, и Django подключается напрямую к хосту.
 
 ## API Endpoints
 
