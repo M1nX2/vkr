@@ -1,7 +1,7 @@
 #!/bin/sh
 set -e
 
-OPENVPN_CONFIG=${OPENVPN_CONFIG:-/vpn/client.ovpn}
+OPENVPN_CONFIG=${OPENVPN_CONFIG:-/config/client.ovpn}
 OPENVPN_ARGS=${OPENVPN_ARGS:-}
 
 if [ ! -f "$OPENVPN_CONFIG" ]; then

@@ -18,17 +18,47 @@ logger = logging.getLogger(__name__)
 API_URL = getattr(settings, 'PYTHON_API_URL', 'http://neurodog-backend:8000')
 API_URL_FALLBACK = getattr(settings, 'PYTHON_API_URL_FALLBACK', None)
 
+# Кэш для хранения доступного URL бэкенда и времени последней проверки
+_api_url_cache = {
+    'url': None,
+    'last_check': 0,
+    'check_interval': 60  # Проверяем доступность раз в 60 секунд
+}
 
-def get_available_api_url():
-    """Получение доступного URL бэкенда (основной или резервный)"""
+
+def get_available_api_url(force_check=False):
+    """Получение доступного URL бэкенда (основной или резервный)
+    
+    Использует кэширование, чтобы не проверять доступность при каждом запросе.
+    Проверка выполняется не чаще раза в check_interval секунд.
+    """
+    import time
+    
+    current_time = time.time()
+    
+    # Если есть кэшированный результат и не прошло достаточно времени, возвращаем его
+    if not force_check and _api_url_cache['url'] and \
+       (current_time - _api_url_cache['last_check']) < _api_url_cache['check_interval']:
+        return _api_url_cache['url']
+    
     # Пробуем основной URL
     try:
         response = requests.get(f'{API_URL}/health', timeout=5)
         if response.status_code == 200:
-            logger.info(f'Основной бэкенд доступен: {API_URL}')
+            logger.debug(f'Основной бэкенд доступен: {API_URL}')
+            _api_url_cache['url'] = API_URL
+            _api_url_cache['last_check'] = current_time
             return API_URL
+    except requests.exceptions.ConnectionError:
+        # Не логируем каждый раз, только при первой проверке или при смене состояния
+        if force_check or not _api_url_cache['url']:
+            logger.warning(f'Основной бэкенд недоступен: {API_URL} (Connection refused)')
+    except requests.exceptions.Timeout:
+        if force_check or not _api_url_cache['url']:
+            logger.warning(f'Основной бэкенд недоступен: {API_URL} (Connection timeout)')
     except Exception as e:
-        logger.warning(f'Основной бэкенд недоступен ({API_URL}): {e}')
+        if force_check or not _api_url_cache['url']:
+            logger.warning(f'Ошибка при проверке основного бэкенда ({API_URL}): {e}')
     
     # Пробуем резервный URL, если указан
     if API_URL_FALLBACK:
@@ -36,17 +66,31 @@ def get_available_api_url():
             response = requests.get(f'{API_URL_FALLBACK}/health', timeout=5)
             if response.status_code == 200:
                 logger.info(f'Резервный бэкенд доступен: {API_URL_FALLBACK}')
+                _api_url_cache['url'] = API_URL_FALLBACK
+                _api_url_cache['last_check'] = current_time
                 return API_URL_FALLBACK
+        except requests.exceptions.ConnectionError:
+            if force_check or not _api_url_cache['url']:
+                logger.warning(f'Резервный бэкенд недоступен: {API_URL_FALLBACK} (Connection refused)')
+        except requests.exceptions.Timeout:
+            if force_check or not _api_url_cache['url']:
+                logger.warning(f'Резервный бэкенд недоступен: {API_URL_FALLBACK} (Connection timeout)')
         except Exception as e:
-            logger.warning(f'Резервный бэкенд недоступен ({API_URL_FALLBACK}): {e}')
+            if force_check or not _api_url_cache['url']:
+                logger.warning(f'Ошибка при проверке резервного бэкенда ({API_URL_FALLBACK}): {e}')
     
-    logger.error('Ни один из бэкендов не доступен')
+    # Если ни один бэкенд не доступен, очищаем кэш и возвращаем None
+    if _api_url_cache['url']:
+        logger.warning('Ранее доступный бэкенд стал недоступен')
+        _api_url_cache['url'] = None
+    
+    _api_url_cache['last_check'] = current_time
     return None
 
 
 def check_api_health():
     """Проверка доступности Python API"""
-    return get_available_api_url() is not None
+    return get_available_api_url(force_check=True) is not None
 
 
 class MainView(View):

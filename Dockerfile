@@ -7,6 +7,9 @@ RUN apt-get update && apt-get install -y \
     default-libmysqlclient-dev \
     pkg-config \
     iproute2 \
+    iputils-ping \
+    netcat-openbsd \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Рабочая директория
