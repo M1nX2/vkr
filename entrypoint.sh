@@ -117,20 +117,27 @@ else
   echo "Local environment detected (DB_HOST=$DB_HOST), skipping VPN routes"
 fi
 
-# Проверяем доступность БД перед миграциями (не критично, если недоступна)
+# Проверяем доступность БД (не критично, если недоступна)
 echo "Checking database availability..."
 if [ -n "$DB_HOST" ]; then
-  # Пытаемся применить миграции, но не прерываем выполнение при ошибке
-  python manage.py migrate --noinput 2>&1 | head -5
-  MIGRATE_EXIT_CODE=$?
-  if [ $MIGRATE_EXIT_CODE -eq 0 ]; then
-    echo "Migrations applied successfully"
-  else
-    echo "Warning: Migrations failed or database unavailable (exit code: $MIGRATE_EXIT_CODE)"
-    echo "Django will continue to run, but database features may be limited"
+  echo "DB_HOST is set to: $DB_HOST"
+  echo "Testing MySQL connectivity to $DB_HOST:3306..."
+  
+  # Проверяем доступность порта MySQL
+  if command -v nc >/dev/null 2>&1; then
+    if nc -z -w 2 "$DB_HOST" 3306 2>/dev/null; then
+      echo "✓ MySQL port 3306 is open on $DB_HOST"
+    else
+      echo "✗ MySQL port 3306 is not accessible on $DB_HOST"
+      echo "  This may be normal if MySQL is not yet ready or VPN routing is not configured"
+    fi
   fi
+  
+  echo "ℹ Django migrations are disabled - tables are created by backend init_db.py"
+  echo "  If you need to apply migrations manually, run:"
+  echo "    docker exec -it django python manage.py migrate"
 else
-  echo "DB_HOST not set, skipping migrations"
+  echo "DB_HOST not set, skipping database checks"
 fi
 
 echo "Collecting static files..."
