@@ -24,11 +24,11 @@ COPY entrypoint.sh /usr/local/bin/vkr-entrypoint.sh
 # Копируем весь проект
 COPY . .
 
-# Создаем директории для статики и медиа
-RUN mkdir -p /app/staticfiles /app/media
+# Создаем директории для статики, медиа и сессий
+RUN mkdir -p /app/staticfiles /app/media /app/sessions
 
 # Настройка прав
-RUN chmod +x /app/manage.py /usr/local/bin/vkr-entrypoint.sh
+RUN chmod +x /app/manage.py /usr/local/bin/vkr-entrypoint.sh /app/run_django.py
 
 # Порт для Django
 EXPOSE 3000

@@ -52,3 +52,4 @@ env/
 .dockerignore
 config/*
 !config/.gitkeep
+sessions/

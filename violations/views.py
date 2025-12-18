@@ -10,7 +10,7 @@ from django.views import View
 from django.utils import timezone
 from datetime import datetime, timedelta
 import requests
-from .models import Violation
+from django.db.utils import OperationalError, DatabaseError
 
 logger = logging.getLogger(__name__)
 
@@ -54,32 +54,109 @@ class MainView(View):
     def get(self, request):
         import json
         
-        # Проверяем доступность бэкенда
-        backend_available = check_api_health()
-        
-        # Получаем активные задачи из сессии
-        active_tasks = request.session.get('active_video_tasks', {})
-        
-        # Фильтруем завершенные задачи (старше 1 часа)
-        now = datetime.now()
-        filtered_tasks = {}
-        for video_id, task in active_tasks.items():
-            started_at = datetime.fromisoformat(task['started_at'])
-            # Оставляем задачи не старше 1 часа
-            if (now - started_at).total_seconds() < 3600:
-                filtered_tasks[video_id] = task
-        
-        if filtered_tasks != active_tasks:
-            request.session['active_video_tasks'] = filtered_tasks
-            request.session.modified = True
-        
-        # Сериализуем задачи для JavaScript
-        active_tasks_json = json.dumps(list(filtered_tasks.values()) if filtered_tasks else [])
-        
-        return render(request, 'main.html', {
-            'backend_available': backend_available,
-            'active_tasks_json': active_tasks_json
-        })
+        # Обёртка для обработки всех возможных ошибок БД
+        try:
+            # Проверяем доступность бэкенда (не критично, если не работает - покажем предупреждение)
+            backend_available = False
+            try:
+                backend_available = check_api_health()
+            except Exception as e:
+                logger.warning(f'Не удалось проверить доступность бэкенда: {e}')
+            
+            # Проверяем доступность БД (не критично, если не работает - покажем предупреждение)
+            db_available = False
+            try:
+                from django.db import connection
+                
+                # Пытаемся установить подключение и выполнить запрос
+                # Используем широкий catch для всех возможных ошибок БД
+                try:
+                    # Пытаемся установить новое подключение с таймаутом
+                    connection.ensure_connection()
+                    
+                    # Выполняем простой запрос для проверки
+                    with connection.cursor() as cursor:
+                        cursor.execute("SELECT 1")
+                        cursor.fetchone()
+                    
+                    db_available = True
+                except (OperationalError, DatabaseError, Exception) as db_error:
+                    # БД недоступна - это нормально, просто продолжаем работу
+                    error_msg = str(db_error)[:200] if db_error else 'Unknown error'
+                    logger.warning(f'БД недоступна: {error_msg}')
+                    db_available = False
+                    # Закрываем неработающее подключение, если оно есть
+                    try:
+                        if hasattr(connection, 'close'):
+                            connection.close()
+                    except:
+                        pass
+            except Exception as e:
+                # Любая другая ошибка также не критична (включая ошибки импорта)
+                error_msg = str(e)[:200] if e else 'Unknown error'
+                logger.warning(f'Не удалось проверить доступность БД: {error_msg}')
+                db_available = False
+            
+            # Получаем активные задачи из сессии (работает без БД)
+            active_tasks = {}
+            try:
+                active_tasks = request.session.get('active_video_tasks', {})
+            except (OperationalError, DatabaseError) as session_error:
+                logger.warning(f'Не удалось получить задачи из сессии: {session_error}')
+                active_tasks = {}
+            except Exception as session_error:
+                logger.warning(f'Ошибка при получении задач из сессии: {session_error}')
+                active_tasks = {}
+            
+            # Фильтруем завершенные задачи (старше 1 часа)
+            now = datetime.now()
+            filtered_tasks = {}
+            for video_id, task in active_tasks.items():
+                try:
+                    started_at = datetime.fromisoformat(task['started_at'])
+                    # Оставляем задачи не старше 1 часа
+                    if (now - started_at).total_seconds() < 3600:
+                        filtered_tasks[video_id] = task
+                except (KeyError, ValueError) as e:
+                    logger.warning(f'Ошибка обработки задачи {video_id}: {e}')
+                    continue
+            
+            if filtered_tasks != active_tasks:
+                try:
+                    request.session['active_video_tasks'] = filtered_tasks
+                    request.session.modified = True
+                except (OperationalError, DatabaseError) as session_error:
+                    logger.warning(f'Не удалось сохранить задачи в сессию: {session_error}')
+                except Exception as session_error:
+                    logger.warning(f'Ошибка при сохранении в сессию: {session_error}')
+            
+            # Сериализуем задачи для JavaScript
+            active_tasks_json = json.dumps(list(filtered_tasks.values()) if filtered_tasks else [])
+            
+            return render(request, 'main.html', {
+                'backend_available': backend_available,
+                'db_available': db_available,
+                'active_tasks_json': active_tasks_json
+            })
+        except (OperationalError, DatabaseError) as db_error:
+            # Если произошла ошибка БД при рендеринге, всё равно показываем страницу
+            error_msg = str(db_error)[:200] if db_error else 'Unknown error'
+            logger.error(f'Критическая ошибка БД в MainView: {error_msg}')
+            # Возвращаем страницу с предупреждением о недоступности БД
+            return render(request, 'main.html', {
+                'backend_available': False,
+                'db_available': False,
+                'active_tasks_json': '[]'
+            })
+        except Exception as e:
+            # Любая другая ошибка - логируем и показываем страницу с предупреждениями
+            error_msg = str(e)[:200] if e else 'Unknown error'
+            logger.error(f'Неожиданная ошибка в MainView: {error_msg}')
+            return render(request, 'main.html', {
+                'backend_available': False,
+                'db_available': False,
+                'active_tasks_json': '[]'
+            })
 
 
 class VideoUploadView(View):
@@ -155,21 +232,27 @@ class VideoUploadView(View):
                 # Сохраняем задачу в сессию для отслеживания прогресса
                 video_id = data.get('video_id')
                 if video_id:
-                    if 'active_video_tasks' not in request.session:
-                        request.session['active_video_tasks'] = {}
-                    
-                    request.session['active_video_tasks'][video_id] = {
-                        'video_id': video_id,
-                        'filename': file.name,
-                        'started_at': datetime.now().isoformat(),
-                        'status': 'processing',
-                        'api_url': api_url  # Сохраняем URL для дальнейших запросов
-                    }
-                    request.session.modified = True
+                    try:
+                        if 'active_video_tasks' not in request.session:
+                            request.session['active_video_tasks'] = {}
+                        
+                        request.session['active_video_tasks'][video_id] = {
+                            'video_id': video_id,
+                            'filename': file.name,
+                            'started_at': datetime.now().isoformat(),
+                            'status': 'processing',
+                            'api_url': api_url  # Сохраняем URL для дальнейших запросов
+                        }
+                        request.session.modified = True
+                    except (OperationalError, DatabaseError) as session_error:
+                        logger.warning(f'Не удалось сохранить задачу в сессию: {session_error}')
+                    except Exception as session_error:
+                        logger.warning(f'Ошибка при сохранении в сессию: {session_error}')
                 
-                # Сохраняем нарушения в базу данных
+                # Сохраняем нарушения в базу данных (не критично, если БД недоступна)
                 if 'violations' in data and isinstance(data['violations'], list) and len(data['violations']) > 0:
                     try:
+                        from .models import Violation
                         for violation_data in data['violations']:
                             Violation.objects.create(
                                 time=violation_data.get('time', '00:00:00'),
@@ -184,7 +267,8 @@ class VideoUploadView(View):
                             )
                         logger.info(f'Сохранено нарушений в БД: {len(data["violations"])}')
                     except Exception as e:
-                        logger.error(f'Ошибка сохранения нарушений в БД: {e}')
+                        logger.warning(f'Не удалось сохранить нарушения в БД (БД может быть недоступна): {e}')
+                        # Продолжаем работу, даже если БД недоступна
                 else:
                     logger.info('Нарушений не обнаружено, пропускаем сохранение в БД')
                 
@@ -218,7 +302,15 @@ class TaskStatusView(View):
     """Получение статуса активных задач из сессии"""
     
     def get(self, request):
-        active_tasks = request.session.get('active_video_tasks', {})
+        try:
+            active_tasks = request.session.get('active_video_tasks', {})
+        except (OperationalError, DatabaseError) as session_error:
+            logger.warning(f'Сессии недоступны: {session_error}')
+            active_tasks = {}
+        except Exception as session_error:
+            logger.warning(f'Ошибка при работе с сессиями: {session_error}')
+            active_tasks = {}
+        
         return JsonResponse({
             'success': True,
             'tasks': list(active_tasks.values())
@@ -233,7 +325,14 @@ class TaskCompleteView(View):
         return super().dispatch(*args, **kwargs)
     
     def post(self, request, video_id):
-        active_tasks = request.session.get('active_video_tasks', {})
+        try:
+            active_tasks = request.session.get('active_video_tasks', {})
+        except (OperationalError, DatabaseError) as session_error:
+            logger.warning(f'Сессии недоступны: {session_error}')
+            active_tasks = {}
+        except Exception as session_error:
+            logger.warning(f'Ошибка при работе с сессиями: {session_error}')
+            active_tasks = {}
         
         if video_id in active_tasks:
             # Обновляем статус задачи
@@ -282,31 +381,40 @@ class ViolationsListView(View):
             except Exception:
                 pass
         
-        # Fallback на базу данных
-        query = Violation.objects.all()
-        
-        if start_date:
-            query = query.filter(date__gte=start_date)
-        if end_date:
-            query = query.filter(date__lte=end_date)
-        
-        violations = query.order_by('date', 'time')
-        
-        violations_data = [{
-            'time': v.time,
-            'type': v.type,
-            'description': v.description,
-            'source': v.source,
-            'date': v.date.strftime('%Y-%m-%d'),
-            'video_url': v.video_url,
-            'breed': v.breed,
-            'muzzle': v.muzzle,
-        } for v in violations]
-        
-        return JsonResponse({
-            'success': True,
-            'violations': violations_data
-        })
+        # Fallback на базу данных (если доступна)
+        try:
+            from .models import Violation
+            query = Violation.objects.all()
+            
+            if start_date:
+                query = query.filter(date__gte=start_date)
+            if end_date:
+                query = query.filter(date__lte=end_date)
+            
+            violations = query.order_by('date', 'time')
+            
+            violations_data = [{
+                'time': v.time,
+                'type': v.type,
+                'description': v.description,
+                'source': v.source,
+                'date': v.date.strftime('%Y-%m-%d'),
+                'video_url': v.video_url,
+                'breed': v.breed,
+                'muzzle': v.muzzle,
+            } for v in violations]
+            
+            return JsonResponse({
+                'success': True,
+                'violations': violations_data
+            })
+        except Exception as e:
+            logger.warning(f'БД недоступна для получения списка нарушений: {e}')
+            return JsonResponse({
+                'success': False,
+                'message': 'База данных недоступна',
+                'violations': []
+            }, status=503)
 
 
 class VideoViolationsView(View):
@@ -314,7 +422,14 @@ class VideoViolationsView(View):
     
     def get(self, request, video_id):
         # Получаем доступный URL (предпочтительно тот, что использовался для загрузки)
-        active_tasks = request.session.get('active_video_tasks', {})
+        try:
+            active_tasks = request.session.get('active_video_tasks', {})
+        except (OperationalError, DatabaseError) as session_error:
+            logger.warning(f'Сессии недоступны: {session_error}')
+            active_tasks = {}
+        except Exception as session_error:
+            logger.warning(f'Ошибка при работе с сессиями: {session_error}')
+            active_tasks = {}
         api_url = None
         
         if video_id in active_tasks and 'api_url' in active_tasks[video_id]:
@@ -334,28 +449,40 @@ class VideoViolationsView(View):
             except Exception:
                 pass
         
-        # Fallback на базу данных
-        violations = Violation.objects.filter(video_id=video_id)
-        
-        violations_data = [{
-            'time': v.time,
-            'type': v.type,
-            'description': v.description,
-            'source': v.source,
-            'date': v.date.strftime('%Y-%m-%d'),
-            'video_url': v.video_url,
-            'breed': v.breed,
-            'muzzle': v.muzzle,
-        } for v in violations]
-        
-        return JsonResponse({
-            'success': True,
-            'data': {
-                'video_id': video_id,
-                'violations': violations_data,
-                'processing_time': None
-            }
-        })
+        # Fallback на базу данных (если доступна)
+        try:
+            from .models import Violation
+            violations = Violation.objects.filter(video_id=video_id)
+            
+            violations_data = [{
+                'time': v.time,
+                'type': v.type,
+                'description': v.description,
+                'source': v.source,
+                'date': v.date.strftime('%Y-%m-%d'),
+                'video_url': v.video_url,
+                'breed': v.breed,
+                'muzzle': v.muzzle,
+            } for v in violations]
+            
+            return JsonResponse({
+                'success': True,
+                'data': {
+                    'video_id': video_id,
+                    'violations': violations_data,
+                    'processing_time': None
+                }
+            })
+        except Exception as e:
+            logger.warning(f'БД недоступна для получения нарушений видео {video_id}: {e}')
+            return JsonResponse({
+                'success': True,
+                'data': {
+                    'video_id': video_id,
+                    'violations': [],
+                    'processing_time': None
+                }
+            })
 
 
 class VideoProgressView(View):
@@ -363,7 +490,14 @@ class VideoProgressView(View):
     
     def get(self, request, video_id):
         # Получаем URL из сессии или используем доступный
-        active_tasks = request.session.get('active_video_tasks', {})
+        try:
+            active_tasks = request.session.get('active_video_tasks', {})
+        except (OperationalError, DatabaseError) as session_error:
+            logger.warning(f'Сессии недоступны: {session_error}')
+            active_tasks = {}
+        except Exception as session_error:
+            logger.warning(f'Ошибка при работе с сессиями: {session_error}')
+            active_tasks = {}
         api_url = None
         
         if video_id in active_tasks and 'api_url' in active_tasks[video_id]:
@@ -380,15 +514,20 @@ class VideoProgressView(View):
                     
                     # Обновляем статус в сессии
                     if video_id in active_tasks:
-                        if progress_data.get('completed') or progress_data.get('percent', 0) >= 100:
-                            active_tasks[video_id]['status'] = 'completed'
-                            active_tasks[video_id]['completed_at'] = datetime.now().isoformat()
-                        else:
-                            active_tasks[video_id]['status'] = 'processing'
-                            active_tasks[video_id]['percent'] = progress_data.get('percent', 0)
-                        
-                        request.session['active_video_tasks'] = active_tasks
-                        request.session.modified = True
+                        try:
+                            if progress_data.get('completed') or progress_data.get('percent', 0) >= 100:
+                                active_tasks[video_id]['status'] = 'completed'
+                                active_tasks[video_id]['completed_at'] = datetime.now().isoformat()
+                            else:
+                                active_tasks[video_id]['status'] = 'processing'
+                                active_tasks[video_id]['percent'] = progress_data.get('percent', 0)
+                            
+                            request.session['active_video_tasks'] = active_tasks
+                            request.session.modified = True
+                        except (OperationalError, DatabaseError) as session_error:
+                            logger.warning(f'Не удалось обновить прогресс в сессии: {session_error}')
+                        except Exception as session_error:
+                            logger.warning(f'Ошибка при обновлении прогресса в сессии: {session_error}')
                     
                     return JsonResponse(progress_data)
             except Exception:
@@ -407,7 +546,14 @@ class VideoView(View):
     
     def get(self, request, video_id):
         # Получаем URL из сессии
-        active_tasks = request.session.get('active_video_tasks', {})
+        try:
+            active_tasks = request.session.get('active_video_tasks', {})
+        except (OperationalError, DatabaseError) as session_error:
+            logger.warning(f'Сессии недоступны: {session_error}')
+            active_tasks = {}
+        except Exception as session_error:
+            logger.warning(f'Ошибка при работе с сессиями: {session_error}')
+            active_tasks = {}
         api_url = None
         
         if video_id in active_tasks and 'api_url' in active_tasks[video_id]:
@@ -435,54 +581,120 @@ class ReportView(View):
     """Страница отчетов"""
     
     def get(self, request):
-        # Получаем даты из сессии или по умолчанию
-        start_date = request.session.get('report_start_date', (timezone.now() - timedelta(days=30)).strftime('%Y-%m-%d'))
-        end_date = request.session.get('report_end_date', timezone.now().strftime('%Y-%m-%d'))
-        
-        # Получаем нарушения из базы данных
-        violations = Violation.objects.filter(
-            date__gte=start_date,
-            date__lte=end_date
-        ).order_by('date', 'time')
-        
-        violations_data = [{
-            'time': v.time,
-            'type': v.type,
-            'description': v.description,
-            'breed': v.breed or 'Не указана',
-            'muzzle': 'Да' if v.muzzle else ('Нет' if v.muzzle is False else 'Не указано'),
-            'video_url': v.video_url,
-            'source': v.source,
-            'date': v.date.strftime('%Y-%m-%d')
-        } for v in violations]
-        
-        return render(request, 'report.html', {
-            'violations': violations_data,
-            'start_date': start_date,
-            'end_date': end_date,
-            'report_title': f'Отчет о нарушениях за период с {start_date} по {end_date}'
-        })
+        try:
+            # Получаем даты из сессии или по умолчанию
+            # Обрабатываем ошибки при работе с сессиями
+            try:
+                start_date = request.session.get('report_start_date', (timezone.now() - timedelta(days=30)).strftime('%Y-%m-%d'))
+                end_date = request.session.get('report_end_date', timezone.now().strftime('%Y-%m-%d'))
+            except (OperationalError, DatabaseError) as session_error:
+                # Если сессии недоступны (старый бэкенд БД), используем значения по умолчанию
+                logger.warning(f'Сессии недоступны, используем значения по умолчанию: {session_error}')
+                start_date = (timezone.now() - timedelta(days=30)).strftime('%Y-%m-%d')
+                end_date = timezone.now().strftime('%Y-%m-%d')
+            except Exception as session_error:
+                logger.warning(f'Ошибка при работе с сессиями: {session_error}')
+                start_date = (timezone.now() - timedelta(days=30)).strftime('%Y-%m-%d')
+                end_date = timezone.now().strftime('%Y-%m-%d')
+            
+            # Получаем нарушения из базы данных (если доступна)
+            violations_data = []
+            db_available = True
+            try:
+                from .models import Violation
+                violations = Violation.objects.filter(
+                    date__gte=start_date,
+                    date__lte=end_date
+                ).order_by('date', 'time')
+                
+                violations_data = [{
+                    'time': v.time,
+                    'type': v.type,
+                    'description': v.description,
+                    'breed': v.breed or 'Не указана',
+                    'muzzle': 'Да' if v.muzzle else ('Нет' if v.muzzle is False else 'Не указано'),
+                    'video_url': v.video_url,
+                    'source': v.source,
+                    'date': v.date.strftime('%Y-%m-%d')
+                } for v in violations]
+            except (OperationalError, DatabaseError) as e:
+                logger.warning(f'БД недоступна для получения отчета: {e}')
+                db_available = False
+            except Exception as e:
+                logger.warning(f'Ошибка при получении отчета: {e}')
+                db_available = False
+            
+            return render(request, 'report.html', {
+                'violations': violations_data,
+                'start_date': start_date,
+                'end_date': end_date,
+                'db_available': db_available,
+                'report_title': f'Отчет о нарушениях за период с {start_date} по {end_date}'
+            })
+        except (OperationalError, DatabaseError) as db_error:
+            # Если произошла критическая ошибка БД, показываем страницу с предупреждением
+            error_msg = str(db_error)[:200] if db_error else 'Unknown error'
+            logger.error(f'Критическая ошибка БД в ReportView.get: {error_msg}')
+            start_date = request.session.get('report_start_date', (timezone.now() - timedelta(days=30)).strftime('%Y-%m-%d'))
+            end_date = request.session.get('report_end_date', timezone.now().strftime('%Y-%m-%d'))
+            return render(request, 'report.html', {
+                'violations': [],
+                'start_date': start_date,
+                'end_date': end_date,
+                'db_available': False,
+                'report_title': f'Отчет о нарушениях за период с {start_date} по {end_date}'
+            })
+        except Exception as e:
+            error_msg = str(e)[:200] if e else 'Unknown error'
+            logger.error(f'Неожиданная ошибка в ReportView.get: {error_msg}')
+            start_date = request.session.get('report_start_date', (timezone.now() - timedelta(days=30)).strftime('%Y-%m-%d'))
+            end_date = request.session.get('report_end_date', timezone.now().strftime('%Y-%m-%d'))
+            return render(request, 'report.html', {
+                'violations': [],
+                'start_date': start_date,
+                'end_date': end_date,
+                'db_available': False,
+                'report_title': f'Отчет о нарушениях за период с {start_date} по {end_date}'
+            })
     
     def post(self, request):
         from django.contrib import messages
         from django.shortcuts import redirect
         
-        start_date = request.POST.get('start_date')
-        end_date = request.POST.get('end_date')
-        
-        if not start_date or not end_date:
-            messages.error(request, 'Необходимо указать обе даты')
+        try:
+            start_date = request.POST.get('start_date')
+            end_date = request.POST.get('end_date')
+            
+            if not start_date or not end_date:
+                messages.error(request, 'Необходимо указать обе даты')
+                return redirect('report')
+            
+            if datetime.strptime(end_date, '%Y-%m-%d') < datetime.strptime(start_date, '%Y-%m-%d'):
+                messages.error(request, 'Дата окончания не может быть раньше даты начала')
+                return redirect('report')
+            
+            # Сохраняем в сессии
+            try:
+                request.session['report_start_date'] = start_date
+                request.session['report_end_date'] = end_date
+            except (OperationalError, DatabaseError) as db_error:
+                error_msg = str(db_error)[:200] if db_error else 'Unknown error'
+                logger.error(f'Ошибка БД при сохранении в сессию в ReportView.post: {error_msg}')
+                messages.error(request, 'Генерация отчета в текущий момент недоступна. База данных временно недоступна.')
+                return redirect('report')
+            
             return redirect('report')
-        
-        if datetime.strptime(end_date, '%Y-%m-%d') < datetime.strptime(start_date, '%Y-%m-%d'):
-            messages.error(request, 'Дата окончания не может быть раньше даты начала')
+        except (OperationalError, DatabaseError) as db_error:
+            # Если БД недоступна, показываем сообщение об ошибке
+            error_msg = str(db_error)[:200] if db_error else 'Unknown error'
+            logger.error(f'Ошибка БД в ReportView.post: {error_msg}')
+            messages.error(request, 'Генерация отчета в текущий момент недоступна. База данных временно недоступна.')
             return redirect('report')
-        
-        # Сохраняем в сессию
-        request.session['report_start_date'] = start_date
-        request.session['report_end_date'] = end_date
-        
-        return redirect('report')
+        except Exception as e:
+            error_msg = str(e)[:200] if e else 'Unknown error'
+            logger.error(f'Неожиданная ошибка в ReportView.post: {error_msg}')
+            messages.error(request, 'Произошла ошибка при обработке запроса.')
+            return redirect('report')
 
 
 class ExportExcelView(View):
@@ -496,11 +708,19 @@ class ExportExcelView(View):
         start_date = request.session.get('report_start_date', (timezone.now() - timedelta(days=30)).strftime('%Y-%m-%d'))
         end_date = request.session.get('report_end_date', timezone.now().strftime('%Y-%m-%d'))
         
-        # Получаем нарушения
-        violations = Violation.objects.filter(
-            date__gte=start_date,
-            date__lte=end_date
-        ).order_by('date', 'time')
+        # Получаем нарушения (если БД доступна)
+        try:
+            from .models import Violation
+            violations = Violation.objects.filter(
+                date__gte=start_date,
+                date__lte=end_date
+            ).order_by('date', 'time')
+        except Exception as e:
+            logger.warning(f'БД недоступна для экспорта отчета: {e}')
+            return JsonResponse({
+                'success': False,
+                'message': 'База данных недоступна'
+            }, status=503)
         
         # Создаем Excel файл
         wb = Workbook()

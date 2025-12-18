@@ -29,6 +29,12 @@
     <div class="container mt-5">
        <h1 class="text-center mb-4">{{ report_title }}</h1>
         
+        {% if not db_available %}
+        <div class="alert alert-danger" role="alert">
+            <h4 class="alert-heading">⚠️ Генерация отчета в текущий момент недоступна</h4>
+            <p class="mb-0">База данных временно недоступна. Отчет не может быть сформирован.</p>
+        </div>
+        {% else %}
         <div class="d-grid mb-4">
             <a href="{% url 'export_excel' %}" class="btn btn-success btn-lg">
                 Выгрузить отчет в Excel
@@ -71,6 +77,7 @@
                 {% endfor %}
             </tbody>
         </table>
+        {% endif %}
     </div>
 
     <!-- Подвал -->

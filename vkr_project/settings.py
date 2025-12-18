@@ -72,9 +72,13 @@ TEMPLATES = [
 WSGI_APPLICATION = 'vkr_project.wsgi.application'
 
 # Database
-# Принудительно используем TCP/IP подключение вместо сокета
-DB_HOST = os.environ.get('DB_HOST', 'mysql')
+# Используем переменные окружения из docker-compose без хардкодов
+DB_HOST = os.environ.get('DB_HOST')
 DB_PORT = os.environ.get('DB_PORT', '3306')
+
+# Если DB_HOST не указан, используем значение по умолчанию
+if not DB_HOST:
+    DB_HOST = 'mysql'  # Значение по умолчанию только если не указано в окружении
 
 DATABASES = {
     'default': {
@@ -87,14 +91,13 @@ DATABASES = {
         'OPTIONS': {
             'charset': 'utf8mb4',
             'init_command': "SET sql_mode='STRICT_TRANS_TABLES'",
+            'connect_timeout': 10,
         },
+        # Ленивое подключение - не подключаемся при старте
+        'CONN_MAX_AGE': 0,
+        'AUTOCOMMIT': True,
     }
 }
-
-# Если HOST не 'localhost' и не '127.0.0.1', принудительно используем TCP/IP
-# Это предотвращает попытки подключения через сокет
-if DB_HOST and DB_HOST not in ('localhost', '127.0.0.1', ''):
-    DATABASES['default']['OPTIONS']['connect_timeout'] = 10
 
 # Password validation
 AUTH_PASSWORD_VALIDATORS = [
@@ -126,6 +129,13 @@ STATICFILES_DIRS = [BASE_DIR / 'static']
 # Media files
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
+
+# Session configuration
+# Используем файловые сессии вместо БД, чтобы не зависеть от БД
+SESSION_ENGINE = 'django.contrib.sessions.backends.file'
+SESSION_FILE_PATH = BASE_DIR / 'sessions'
+# Создаем директорию для сессий, если её нет
+SESSION_FILE_PATH.mkdir(exist_ok=True)
 
 # Default primary key field type
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
