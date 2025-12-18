@@ -293,25 +293,40 @@ class VideoUploadView(View):
                     except Exception as session_error:
                         logger.warning(f'Ошибка при сохранении в сессию: {session_error}')
                 
-                # Сохраняем нарушения в базу данных (не критично, если БД недоступна)
+                # Сохраняем нарушения в базу данных через API бэкенда
                 if 'violations' in data and isinstance(data['violations'], list) and len(data['violations']) > 0:
                     try:
-                        from .models import Violation
-                        for violation_data in data['violations']:
-                            Violation.objects.create(
-                                time=violation_data.get('time', '00:00:00'),
-                                type=violation_data.get('type', 'Неубранные экскременты'),
-                                description=violation_data.get('description', ''),
-                                source=violation_data.get('source', ''),
-                                date=violation_data.get('date', datetime.now().date()),
-                                video_id=data.get('video_id'),
-                                video_url=violation_data.get('video_url'),
-                                breed=violation_data.get('breed'),
-                                muzzle=violation_data.get('muzzle'),
+                        api_url = get_available_api_url()
+                        if api_url:
+                            # Подготавливаем данные для отправки
+                            violations_to_save = []
+                            for violation_data in data['violations']:
+                                violations_to_save.append({
+                                    'time': violation_data.get('time', '00:00:00'),
+                                    'type': violation_data.get('type', 'Неубранные экскременты'),
+                                    'description': violation_data.get('description', ''),
+                                    'source': violation_data.get('source', ''),
+                                    'date': violation_data.get('date', datetime.now().date().strftime('%Y-%m-%d')),
+                                    'video_url': violation_data.get('video_url'),
+                                    'breed': violation_data.get('breed'),
+                                    'muzzle': violation_data.get('muzzle'),
+                                })
+                            
+                            # Отправляем запрос к бэкенду для сохранения
+                            response = requests.post(
+                                f'{api_url}/api/v1/violations/save',
+                                json=violations_to_save,
+                                params={'video_id': data.get('video_id')},
+                                timeout=10
                             )
-                        logger.info(f'Сохранено нарушений в БД: {len(data["violations"])}')
+                            if response.status_code == 200:
+                                logger.info(f'Сохранено нарушений в БД через API: {len(data["violations"])}')
+                            else:
+                                logger.warning(f'Не удалось сохранить нарушения через API: {response.status_code}')
+                        else:
+                            logger.warning('Бэкенд недоступен, нарушения не сохранены в БД')
                     except Exception as e:
-                        logger.warning(f'Не удалось сохранить нарушения в БД (БД может быть недоступна): {e}')
+                        logger.warning(f'Не удалось сохранить нарушения в БД через API (БД может быть недоступна): {e}')
                         # Продолжаем работу, даже если БД недоступна
                 else:
                     logger.info('Нарушений не обнаружено, пропускаем сохранение в БД')
@@ -425,40 +440,43 @@ class ViolationsListView(View):
             except Exception:
                 pass
         
-        # Fallback на базу данных (если доступна)
+        # Fallback на базу данных через API бэкенда
         try:
-            from .models import Violation
-            query = Violation.objects.all()
-            
-            if start_date:
-                query = query.filter(date__gte=start_date)
-            if end_date:
-                query = query.filter(date__lte=end_date)
-            
-            violations = query.order_by('date', 'time')
-            
-            violations_data = [{
-                'time': v.time,
-                'type': v.type,
-                'description': v.description,
-                'source': v.source,
-                'date': v.date.strftime('%Y-%m-%d'),
-                'video_url': v.video_url,
-                'breed': v.breed,
-                'muzzle': v.muzzle,
-            } for v in violations]
-            
-            return JsonResponse({
-                'success': True,
-                'violations': violations_data
-            })
+            api_url = get_available_api_url()
+            if api_url:
+                params = {}
+                if start_date:
+                    params['start_date'] = start_date
+                if end_date:
+                    params['end_date'] = end_date
+                
+                response = requests.get(
+                    f'{api_url}/api/v1/violations/db',
+                    params=params,
+                    timeout=10
+                )
+                
+                if response.status_code == 200:
+                    result = response.json()
+                    violations_data = result.get('violations', [])
+                    # Преобразуем формат для совместимости
+                    for v in violations_data:
+                        v['date'] = v.get('date', '')
+                        v['breed'] = v.get('breed') or ''
+                        v['muzzle'] = v.get('muzzle')
+                    
+                    return JsonResponse({
+                        'success': True,
+                        'violations': violations_data
+                    })
         except Exception as e:
-            logger.warning(f'БД недоступна для получения списка нарушений: {e}')
-            return JsonResponse({
-                'success': False,
-                'message': 'База данных недоступна',
-                'violations': []
-            }, status=503)
+            logger.warning(f'Ошибка при получении нарушений через API: {e}')
+        
+        return JsonResponse({
+            'success': False,
+            'message': 'База данных недоступна',
+            'violations': []
+        }, status=503)
 
 
 class VideoViolationsView(View):
@@ -493,40 +511,43 @@ class VideoViolationsView(View):
             except Exception:
                 pass
         
-        # Fallback на базу данных (если доступна)
+        # Fallback на базу данных через API бэкенда
         try:
-            from .models import Violation
-            violations = Violation.objects.filter(video_id=video_id)
-            
-            violations_data = [{
-                'time': v.time,
-                'type': v.type,
-                'description': v.description,
-                'source': v.source,
-                'date': v.date.strftime('%Y-%m-%d'),
-                'video_url': v.video_url,
-                'breed': v.breed,
-                'muzzle': v.muzzle,
-            } for v in violations]
-            
-            return JsonResponse({
-                'success': True,
-                'data': {
-                    'video_id': video_id,
-                    'violations': violations_data,
-                    'processing_time': None
-                }
-            })
+            api_url = get_available_api_url()
+            if api_url:
+                response = requests.get(
+                    f'{api_url}/api/v1/violations/db/{video_id}',
+                    timeout=10
+                )
+                
+                if response.status_code == 200:
+                    result = response.json()
+                    violations_data = result.get('violations', [])
+                    # Преобразуем формат для совместимости
+                    for v in violations_data:
+                        v['date'] = v.get('date', '')
+                        v['breed'] = v.get('breed') or ''
+                        v['muzzle'] = v.get('muzzle')
+                    
+                    return JsonResponse({
+                        'success': True,
+                        'data': {
+                            'video_id': video_id,
+                            'violations': violations_data,
+                            'processing_time': None
+                        }
+                    })
         except Exception as e:
-            logger.warning(f'БД недоступна для получения нарушений видео {video_id}: {e}')
-            return JsonResponse({
-                'success': True,
-                'data': {
-                    'video_id': video_id,
-                    'violations': [],
-                    'processing_time': None
-                }
-            })
+            logger.warning(f'Ошибка при получении нарушений видео {video_id} через API: {e}')
+        
+        return JsonResponse({
+            'success': True,
+            'data': {
+                'video_id': video_id,
+                'violations': [],
+                'processing_time': None
+            }
+        })
 
 
 class VideoProgressView(View):
@@ -645,11 +666,39 @@ class ReportView(View):
             violations_data = []
             db_available = True
             try:
-                from .models import Violation
-                violations = Violation.objects.filter(
-                    date__gte=start_date,
-                    date__lte=end_date
-                ).order_by('date', 'time')
+                # Получаем нарушения через API бэкенда
+                api_url = get_available_api_url()
+                if not api_url:
+                    raise Exception("Backend unavailable")
+                
+                response = requests.get(
+                    f'{api_url}/api/v1/violations/db',
+                    params={
+                        'start_date': start_date,
+                        'end_date': end_date
+                    },
+                    timeout=10
+                )
+                
+                if response.status_code != 200:
+                    raise Exception(f"API returned {response.status_code}")
+                
+                result = response.json()
+                violations_list = result.get('violations', [])
+                
+                # Преобразуем в формат для экспорта
+                violations = []
+                for v in violations_list:
+                    violations.append({
+                        'date': v.get('date', ''),
+                        'time': v.get('time', ''),
+                        'type': v.get('type', ''),
+                        'description': v.get('description', ''),
+                        'source': v.get('source', ''),
+                        'breed': v.get('breed') or '',
+                        'muzzle': v.get('muzzle'),
+                        'video_url': v.get('video_url')
+                    })
                 
                 violations_data = [{
                     'time': v.time,
@@ -752,18 +801,53 @@ class ExportExcelView(View):
         start_date = request.session.get('report_start_date', (timezone.now() - timedelta(days=30)).strftime('%Y-%m-%d'))
         end_date = request.session.get('report_end_date', timezone.now().strftime('%Y-%m-%d'))
         
-        # Получаем нарушения (если БД доступна)
+        # Получаем нарушения через API бэкенда
+        violations = []
         try:
-            from .models import Violation
-            violations = Violation.objects.filter(
-                date__gte=start_date,
-                date__lte=end_date
-            ).order_by('date', 'time')
+            api_url = get_available_api_url()
+            if api_url:
+                response = requests.get(
+                    f'{api_url}/api/v1/violations/db',
+                    params={
+                        'start_date': start_date,
+                        'end_date': end_date
+                    },
+                    timeout=10
+                )
+                
+                if response.status_code == 200:
+                    result = response.json()
+                    violations_list = result.get('violations', [])
+                    
+                    # Преобразуем в формат для экспорта
+                    for v in violations_list:
+                        violations.append({
+                            'date': v.get('date', ''),
+                            'time': v.get('time', ''),
+                            'type': v.get('type', ''),
+                            'description': v.get('description', ''),
+                            'source': v.get('source', ''),
+                            'breed': v.get('breed') or '',
+                            'muzzle': v.get('muzzle'),
+                            'video_url': v.get('video_url')
+                        })
+                else:
+                    logger.warning(f'Ошибка при получении данных для экспорта через API: {response.status_code}')
+                    return JsonResponse({
+                        'success': False,
+                        'message': 'Ошибка при получении данных'
+                    }, status=503)
+            else:
+                logger.warning('Бэкенд недоступен для экспорта отчета')
+                return JsonResponse({
+                    'success': False,
+                    'message': 'Бэкенд недоступен'
+                }, status=503)
         except Exception as e:
-            logger.warning(f'БД недоступна для экспорта отчета: {e}')
+            logger.warning(f'Ошибка при получении данных для экспорта: {e}')
             return JsonResponse({
                 'success': False,
-                'message': 'База данных недоступна'
+                'message': 'Ошибка при получении данных'
             }, status=503)
         
         # Создаем Excel файл

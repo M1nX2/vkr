@@ -125,11 +125,45 @@ if [ -n "$DB_HOST" ]; then
   
   # Проверяем доступность порта MySQL
   if command -v nc >/dev/null 2>&1; then
-    if nc -z -w 2 "$DB_HOST" 3306 2>/dev/null; then
+    echo "Attempting to connect to MySQL at $DB_HOST:3306..."
+    
+    # Проверяем маршрут к DB_HOST
+    if echo "$DB_HOST" | grep -qE "^10\.0\.(70|60)\."; then
+      echo "  DB_HOST is a VPN IP address, checking VPN routing..."
+      
+      # Проверяем, есть ли маршрут через VPN
+      if ip route get "$DB_HOST" 2>/dev/null | grep -q "via"; then
+        ROUTE_INFO=$(ip route get "$DB_HOST" 2>/dev/null)
+        echo "  Route to $DB_HOST: $ROUTE_INFO"
+      else
+        echo "  ⚠ No specific route found for $DB_HOST"
+      fi
+      
+      # Проверяем доступность через ping
+      if command -v ping >/dev/null 2>&1; then
+        if ping -c 1 -W 2 "$DB_HOST" >/dev/null 2>&1; then
+          echo "  ✓ $DB_HOST is reachable via ping"
+        else
+          echo "  ✗ $DB_HOST is not reachable via ping"
+          echo "    This may indicate VPN routing issue"
+        fi
+      fi
+    fi
+    
+    if nc -z -w 5 "$DB_HOST" 3306 2>/dev/null; then
       echo "✓ MySQL port 3306 is open on $DB_HOST"
     else
       echo "✗ MySQL port 3306 is not accessible on $DB_HOST"
-      echo "  This may be normal if MySQL is not yet ready or VPN routing is not configured"
+      echo ""
+      echo "  Troubleshooting steps:"
+      echo "    1. Check VPN connection: docker logs openvpn-client | tail -20"
+      echo "    2. Check VPN routes: docker exec django ip route | grep 10.0.70"
+      echo "    3. Check MySQL container: docker ps | grep mysql"
+      echo "    4. Check port forwarding in backend: docker logs neurodog-openvpn-client | grep MySQL"
+      echo "    5. Verify MYSQL_VPN_IP is set in NeuroDog-1/.env"
+      echo ""
+      echo "  Note: MySQL port forwarding is configured in backend's openvpn-client"
+      echo "        Make sure backend's openvpn-client has MYSQL_VPN_IP=10.0.70.61 set"
     fi
   fi
   
