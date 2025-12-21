@@ -606,6 +606,61 @@ class VideoProgressView(View):
         })
 
 
+class VideoCancelView(View):
+    """Отмена обработки видео"""
+    
+    @method_decorator(csrf_exempt)
+    def dispatch(self, *args, **kwargs):
+        return super().dispatch(*args, **kwargs)
+    
+    def post(self, request, video_id):
+        api_url = get_available_api_url()
+        if not api_url:
+            return JsonResponse({
+                'success': False,
+                'message': 'Бэкенд недоступен'
+            }, status=503)
+        
+        try:
+            response = requests.post(f'{api_url}/api/v1/cancel/{video_id}', timeout=10)
+            
+            if response.status_code == 200:
+                data = response.json()
+                
+                # Удаляем задачу из сессии
+                try:
+                    active_tasks = request.session.get('active_video_tasks', {})
+                    if video_id in active_tasks:
+                        del active_tasks[video_id]
+                        request.session['active_video_tasks'] = active_tasks
+                        request.session.modified = True
+                except (OperationalError, DatabaseError) as session_error:
+                    logger.warning(f'Не удалось обновить сессию: {session_error}')
+                except Exception as session_error:
+                    logger.warning(f'Ошибка при обновлении сессии: {session_error}')
+                
+                return JsonResponse(data)
+            else:
+                error_data = response.json() if response.text else {}
+                return JsonResponse({
+                    'success': False,
+                    'message': error_data.get('detail', 'Ошибка отмены обработки')
+                }, status=response.status_code)
+                
+        except requests.exceptions.ConnectionError as e:
+            logger.error(f'Ошибка подключения к Python API: {e}')
+            return JsonResponse({
+                'success': False,
+                'message': 'Не удалось подключиться к Python API'
+            }, status=503)
+        except Exception as e:
+            logger.error(f'Ошибка отмены обработки: {e}')
+            return JsonResponse({
+                'success': False,
+                'message': f'Ошибка: {str(e)}'
+            }, status=500)
+
+
 class VideoView(View):
     """Получение обработанного видео"""
     

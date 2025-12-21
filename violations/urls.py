@@ -7,6 +7,7 @@ urlpatterns = [
     path('api/violations/', views.ViolationsListView.as_view(), name='violations_list'),
     path('api/violations/<str:video_id>/', views.VideoViolationsView.as_view(), name='violations_video'),
     path('api/video/progress/<str:video_id>/', views.VideoProgressView.as_view(), name='video_progress'),
+    path('api/video/cancel/<str:video_id>/', views.VideoCancelView.as_view(), name='video_cancel'),
     path('api/video/<str:video_id>/', views.VideoView.as_view(), name='video_get'),
     path('api/tasks/', views.TaskStatusView.as_view(), name='tasks_status'),
     path('api/tasks/<str:video_id>/complete/', views.TaskCompleteView.as_view(), name='task_complete'),

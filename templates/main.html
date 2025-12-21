@@ -144,6 +144,11 @@
                                          role="progressbar" style="width: 0%"></div>
                                 </div>
                                 <div id="uploadStatus" class="text-center small mt-1">0%</div>
+                                <div class="text-center mt-2">
+                                    <button type="button" id="cancelBtn" class="btn btn-danger btn-sm" style="display: none;">
+                                        Отменить обработку
+                                    </button>
+                                </div>
                             </div>
                         </div>
 
@@ -234,6 +239,8 @@
             const downloadVideoBtn = document.getElementById('downloadVideoBtn');
             
             let filesToUpload = [];
+            let currentVideoId = null;  // ID текущего обрабатываемого видео
+            let isProcessing = false;  // Флаг обработки
             
             // Восстанавливаем активные задачи из сессии
             const activeTasks = {{ active_tasks_json|safe }};
@@ -250,7 +257,10 @@
             // Функция восстановления обработки
             async function restoreProcessing(videoId) {
                 progressContainer.style.display = 'block';
-                submitBtn.disabled = true;
+                isProcessing = true;
+                currentVideoId = videoId;
+                setFormDisabled(true);
+                document.getElementById('cancelBtn').style.display = 'block';
                 updateProgress(0, 'Восстановление обработки...');
                 
                 try {
@@ -279,13 +289,32 @@
                     console.error('Ошибка восстановления:', error);
                 } finally {
                     progressContainer.style.display = 'none';
-                    submitBtn.disabled = false;
+                    document.getElementById('cancelBtn').style.display = 'none';
+                    isProcessing = false;
+                    currentVideoId = null;
+                    setFormDisabled(false);
                 }
             }
 
+            // Функция блокировки/разблокировки элементов формы
+            function setFormDisabled(disabled) {
+                fileInput.disabled = disabled;
+                submitBtn.disabled = disabled;
+                fileUploadArea.style.pointerEvents = disabled ? 'none' : 'auto';
+                fileUploadArea.style.opacity = disabled ? '0.6' : '1';
+                
+                // Блокируем удаление файлов из списка
+                document.querySelectorAll('.file-item-remove').forEach(btn => {
+                    btn.style.pointerEvents = disabled ? 'none' : 'auto';
+                    btn.style.opacity = disabled ? '0.5' : '1';
+                });
+            }
+            
             // Обработка выбора файлов
             fileInput.addEventListener('change', function() {
-                updateSelectedFilesList(this.files);
+                if (!isProcessing) {
+                    updateSelectedFilesList(this.files);
+                }
             });
 
             // Обновление списка выбранных файлов
@@ -357,6 +386,10 @@
             fileUploadArea.addEventListener('drop', handleDrop, false);
 
             function handleDrop(e) {
+                if (isProcessing) {
+                    return;  // Блокируем drop во время обработки
+                }
+                
                 const dt = e.dataTransfer;
                 const files = dt.files;
                 
@@ -381,7 +414,9 @@
                 
                 // Показываем прогресс-бар
                 progressContainer.style.display = 'block';
-                submitBtn.disabled = true;
+                isProcessing = true;
+                setFormDisabled(true);
+                document.getElementById('cancelBtn').style.display = 'block';
                 resultsContainer.style.display = 'none';
                 violationsList.innerHTML = '';
                 if (analysisResult) {
@@ -430,9 +465,15 @@
                     
                     if (result.success) {
                         videoId = result.data.video_id;
+                        currentVideoId = videoId;  // Сохраняем ID для отмены
                         
                         // Начинаем отслеживание прогресса
-                        await trackProgress(videoId);
+                        const wasCancelled = await trackProgress(videoId);
+                        
+                        // Если была отмена, не получаем результаты
+                        if (wasCancelled) {
+                            return;
+                        }
                         
                         // Ждем немного, чтобы обработка точно завершилась
                         await new Promise(resolve => setTimeout(resolve, 1000));
@@ -477,7 +518,10 @@
                     filesToUpload = [];
                     updateSelectedFilesList([]);
                     progressContainer.style.display = 'none';
-                    submitBtn.disabled = false;
+                    document.getElementById('cancelBtn').style.display = 'none';
+                    isProcessing = false;
+                    currentVideoId = null;
+                    setFormDisabled(false);
                 }
             }
             
@@ -485,17 +529,35 @@
             async function trackProgress(videoId) {
                 const maxAttempts = 600;
                 let attempts = 0;
+                let wasCancelled = false;
                 
-                return new Promise((resolve, reject) => {
+                return new Promise((resolve) => {
                     const checkProgress = async () => {
                         try {
                             const response = await fetch(`/api/video/progress/${videoId}/`);
                             if (!response.ok) {
-                                resolve();
+                                resolve(false);
                                 return;
                             }
                             
                             const progressData = await response.json();
+                            
+                            // Проверяем, была ли отмена
+                            if (progressData.cancelled || progressData.status === 'Обработка отменена') {
+                                wasCancelled = true;
+                                updateProgress(0, 'Обработка отменена');
+                                // Показываем сообщение об отмене
+                                if (analysisResult) {
+                                    analysisResult.className = 'alert alert-info mb-3';
+                                    analysisResult.innerHTML = `
+                                        <h5 class="alert-heading">ℹ️ Обработка отменена</h5>
+                                        <p class="mb-0">Обработка видео была успешно отменена. Видео не было сохранено.</p>
+                                    `;
+                                    analysisResult.style.display = 'block';
+                                }
+                                resolve(true);
+                                return;
+                            }
                             
                             const percent = progressData.percent || 0;
                             const statusText = progressData.status || 'Обработка...';
@@ -508,13 +570,13 @@
                             
                             if (progressData.completed || percent >= 100) {
                                 updateProgress(100);
-                                resolve();
+                                resolve(false);
                                 return;
                             }
                             
                             attempts++;
                             if (attempts >= maxAttempts) {
-                                resolve();
+                                resolve(false);
                                 return;
                             }
                             
@@ -524,7 +586,7 @@
                             if (attempts < maxAttempts) {
                                 setTimeout(checkProgress, 1000);
                             } else {
-                                resolve();
+                                resolve(false);
                             }
                         }
                     };
@@ -532,6 +594,58 @@
                     checkProgress();
                 });
             }
+            
+            // Обработчик кнопки отмены
+            document.getElementById('cancelBtn').addEventListener('click', async function() {
+                if (!currentVideoId) {
+                    return;
+                }
+                
+                if (!confirm('Вы уверены, что хотите отменить обработку видео?')) {
+                    return;
+                }
+                
+                try {
+                    const csrfToken = getCookie('csrftoken') || document.querySelector('[name=csrfmiddlewaretoken]')?.value;
+                    const response = await fetch(`/api/video/cancel/${encodeURIComponent(currentVideoId)}/`, {
+                        method: 'POST',
+                        headers: {
+                            'X-CSRFToken': csrfToken,
+                            'Accept': 'application/json'
+                        }
+                    });
+                    
+                    if (response.ok) {
+                        // Показываем сообщение об успешной отмене
+                        if (analysisResult) {
+                            analysisResult.className = 'alert alert-info mb-3';
+                            analysisResult.innerHTML = `
+                                <h5 class="alert-heading">✅ Обработка успешно отменена</h5>
+                                <p class="mb-0">Обработка видео была отменена. Видео не было сохранено.</p>
+                            `;
+                            analysisResult.style.display = 'block';
+                        }
+                        
+                        // Сбрасываем состояние
+                        progressContainer.style.display = 'none';
+                        document.getElementById('cancelBtn').style.display = 'none';
+                        isProcessing = false;
+                        currentVideoId = null;
+                        setFormDisabled(false);
+                        updateProgress(0);
+                        
+                        // Очищаем форму
+                        form.reset();
+                        filesToUpload = [];
+                        updateSelectedFilesList([]);
+                    } else {
+                        alert('Ошибка при отмене обработки');
+                    }
+                } catch (error) {
+                    console.error('Ошибка отмены:', error);
+                    alert('Ошибка при отмене обработки: ' + error.message);
+                }
+            });
 
             // Обновление прогресс-бара
             function updateProgress(percent, statusText = null) {
